@@ -37,7 +37,18 @@ aix/
 │   └── README.md
 └── manual_deploy/     # 方式二：完整手動部署說明 (含 IPFilter)
     └── README.md
+
+docs/
+├── README.md              # 索引
+├── SOP-TEMPLATE.md        # SOP 模板
+├── pce/                   # PCE 伺服器端 SOP (7 份)
+├── ven/                   # VEN 端點 SOP (6 份)
+├── cert/                  # 憑證與 SSL (3 份)
+├── platform/              # K8s / FlowLink / Linux (5 份)
+└── guide/                 # 原廠手冊本機快取 (gitignored)
 ```
+
+完整 SOP 索引見 [`docs/README.md`](docs/README.md)
 
 ---
 
@@ -144,7 +155,18 @@ aix/
 │   └── README.md
 └── manual_deploy/     # Method 2: Full standalone deployment guide (incl. IPFilter)
     └── README.md
+
+docs/
+├── README.md              # Index
+├── SOP-TEMPLATE.md        # SOP template
+├── pce/                   # PCE server-side SOPs (7 docs)
+├── ven/                   # VEN endpoint SOPs (6 docs)
+├── cert/                  # Certificates & SSL (3 docs)
+├── platform/              # K8s / FlowLink / Linux (5 docs)
+└── guide/                 # Vendor manuals local cache (gitignored)
 ```
+
+Full SOP index: [`docs/README.md`](docs/README.md)
 
 ---
 
