@@ -33,8 +33,10 @@ tmp/
 *.tar.gz
 *.zip
 
-# Illumio vendor manuals (local-only cache; obtain from internal source or NotebookLM)
+# Illumio vendor manuals & working renders (local-only cache; obtain from internal source or NotebookLM)
 docs/guide/*.docx
+docs/guide/_rework/*.docx
+docs/guide/_rework/*.pdf
 
 # Sensitive information (Just in case, though we scrubbed it)
 # *.crt
