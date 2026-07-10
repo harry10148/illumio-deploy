@@ -25,8 +25,8 @@ set -e
 ACTIVATION_CODE="<YOUR_ACTIVATION_CODE>"
 MANAGEMENT_SERVER="<YOUR_PCE_FQDN:PORT>"
 SOURCE_DIR=""      # 留空=自動尋找腳本所在目錄，可指定絕對路徑例如 "/tmp/installers"
-VEN_RPM_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .rpm
-VEN_DEB_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .deb
+VEN_RPM_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .rpm；指定時請填檔名（相對於 SOURCE_DIR），勿填絕對路徑
+VEN_DEB_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .deb；指定時請填檔名（相對於 SOURCE_DIR），勿填絕對路徑
 # ==========================================
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -157,21 +157,33 @@ esac
 if [ "$VEN_ALREADY_INSTALLED" = true ]; then
     print_skip "VEN 已安裝，跳過安裝步驟。"
 else
-    [ -z "$SOURCE_DIR" ] && TARGET_DIR="$SCRIPT_DIR" || TARGET_DIR="$SOURCE_DIR"
+    if [ -z "$SOURCE_DIR" ]; then
+        TARGET_DIR="$SCRIPT_DIR"
+    else
+        TARGET_DIR="$SOURCE_DIR"
+    fi
 
     case "$OS_TYPE" in
         rhel|centos|rocky|almalinux|ol)
-            [ -z "$VEN_RPM_FILE" ] && VEN_RPM_FILE=$(ls "$TARGET_DIR"/*.rpm 2>/dev/null | head -1) || VEN_RPM_FILE="$TARGET_DIR/$VEN_RPM_FILE"
+            if [ -z "$VEN_RPM_FILE" ]; then
+                VEN_RPM_FILE=$(ls "$TARGET_DIR"/*.rpm 2>/dev/null | head -1)
+            else
+                VEN_RPM_FILE="$TARGET_DIR/$VEN_RPM_FILE"
+            fi
             if [ -z "$VEN_RPM_FILE" ] || [ ! -f "$VEN_RPM_FILE" ]; then
-                print_error "找不到 VEN RPM 安裝包。請確保留在: $TARGET_DIR"; exit 1
+                print_error "找不到 VEN RPM 安裝包。請確保放在: $TARGET_DIR"; exit 1
             fi
             print_info "安裝: $(basename "$VEN_RPM_FILE")"
             rpm -ivh "$VEN_RPM_FILE"
             print_ok "VEN 安裝完成。" ;;
         ubuntu|debian)
-            [ -z "$VEN_DEB_FILE" ] && VEN_DEB_FILE=$(ls "$TARGET_DIR"/*.deb 2>/dev/null | head -1) || VEN_DEB_FILE="$TARGET_DIR/$VEN_DEB_FILE"
+            if [ -z "$VEN_DEB_FILE" ]; then
+                VEN_DEB_FILE=$(ls "$TARGET_DIR"/*.deb 2>/dev/null | head -1)
+            else
+                VEN_DEB_FILE="$TARGET_DIR/$VEN_DEB_FILE"
+            fi
             if [ -z "$VEN_DEB_FILE" ] || [ ! -f "$VEN_DEB_FILE" ]; then
-                print_error "找不到 VEN DEB 安裝包。請確保留在: $TARGET_DIR"; exit 1
+                print_error "找不到 VEN DEB 安裝包。請確保放在: $TARGET_DIR"; exit 1
             fi
             print_info "安裝: $(basename "$VEN_DEB_FILE")"
             dpkg -i "$VEN_DEB_FILE"
