@@ -83,6 +83,15 @@ REM === Step 2: 安裝 VEN ===
 call :LogBlank
 call :Log [Step 2/3] 安裝 Illumio VEN Agent...
 
+REM 冪等性：VEN 已安裝時跳過安裝步驟（與 Linux 版行為一致）
+set "VEN_INSTALLED="
+if exist "%INSTALL_DIR%\illumio-ven-ctl.exe" set "VEN_INSTALLED=1"
+if exist "C:\Program Files\Illumio\illumio-ven-ctl.exe" set "VEN_INSTALLED=1"
+if defined VEN_INSTALLED (
+    call :Log [SKIP]   偵測到 VEN 已安裝，跳過安裝步驟。
+    goto :step3
+)
+
 if "%SOURCE_DIR%"=="" (
     set "TARGET_DIR=%~dp0"
 ) else (

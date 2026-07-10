@@ -111,6 +111,12 @@ try {
     Write-Log "INFO" ""
     Write-Log "INFO" "[Step 2/3] 安裝 Illumio VEN Agent..."
 
+    # 冪等性：VEN 已安裝時跳過安裝步驟（與 Linux 版行為一致）
+    $preCtl = Join-Path $InstallDir "illumio-ven-ctl.exe"
+    if (-not (Test-Path $preCtl)) { $preCtl = "C:\Program Files\Illumio\illumio-ven-ctl.exe" }
+    if (Test-Path $preCtl) {
+        Write-Log "SKIP" "偵測到 VEN 已安裝 ($preCtl)，跳過安裝步驟。"
+    } else {
     if (-not [string]::IsNullOrEmpty($SourceDir)) {
         $ScriptPath = $SourceDir
     } else {
@@ -145,6 +151,7 @@ try {
         Throw "安裝失敗。Exit Code: $($proc.ExitCode)"
     } else {
         Write-Log "OK" "VEN Agent 安裝完成。"
+    }
     }
 
     # === Step 3: 啟用 ===
