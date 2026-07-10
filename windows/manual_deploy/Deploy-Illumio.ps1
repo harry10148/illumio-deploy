@@ -69,6 +69,12 @@ function Write-Log {
 }
 
 try {
+    # 前置權限檢查：憑證匯入與安裝皆需管理員權限
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Throw "此腳本需要以系統管理員身分執行 PowerShell。"
+    }
+
     Write-Log "INFO" "============================================"
     Write-Log "INFO" " Illumio VEN — 方式二：手動安裝部署腳本"
     Write-Log "INFO" "============================================"
@@ -90,6 +96,10 @@ try {
     if (Test-Path $localCertPath) {
         Write-Log "INFO" "使用同目錄憑證檔案: $localCertPath"
         $EmbeddedCertContent = Get-Content -Path $localCertPath -Raw
+    }
+
+    if ($EmbeddedCertContent -like "*PLACEHOLDER_CERTIFICATE_CONTENT*") {
+        Throw "內嵌憑證仍為佔位符。請放置同目錄 illumio-ca.crt 或替換腳本內嵌憑證。"
     }
 
     $tempCertPath = "$env:TEMP\illumio-ca.crt"

@@ -34,6 +34,12 @@ PLACEHOLDER_CERTIFICATE_CONTENT_REPLACE_WITH_YOUR_ACTUAL_CERTIFICATE
 "@
 
 try {
+    # 前置權限檢查：catch 內的英文錯誤字串比對在非英文 Windows 不可靠
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Throw "此腳本需要以系統管理員身分執行 PowerShell。"
+    }
+
     Write-Output "============================================"
     Write-Output " Illumio Root CA 憑證匯入工具"
     Write-Output "============================================"
@@ -41,18 +47,22 @@ try {
 
     # 準備憑證內容 (優先順序: -CertFile 參數 > 同目錄 illumio-ca.crt > 內嵌憑證)
     $localCertPath = Join-Path $PSScriptRoot "illumio-ca.crt"
-    if ($CertFile -ne "" -and (Test-Path $CertFile)) {
+    if ($CertFile -ne "") {
+        if (-not (Test-Path $CertFile)) {
+            Throw "指定的憑證檔案不存在: $CertFile"
+        }
         Write-Output "[INFO] 使用外部憑證檔案 (-CertFile): $CertFile"
         $certContent = Get-Content -Path $CertFile -Raw
-    } elseif ($CertFile -eq "" -and (Test-Path $localCertPath)) {
+    } elseif (Test-Path $localCertPath) {
         Write-Output "[INFO] 使用同目錄憑證檔案: $localCertPath"
         $certContent = Get-Content -Path $localCertPath -Raw
     } else {
-        if ($CertFile -ne "") {
-            Write-Warning "指定的憑證檔案不存在: $CertFile，改用內嵌憑證。"
-        }
         Write-Output "[INFO] 使用內嵌憑證。"
         $certContent = $EmbeddedCertContent
+    }
+
+    if ($certContent -like "*PLACEHOLDER_CERTIFICATE_CONTENT*") {
+        Throw "內嵌憑證仍為佔位符。請以 -CertFile 指定憑證、放置同目錄 illumio-ca.crt，或替換腳本內嵌憑證。"
     }
 
     # 儲存為暫存檔案
