@@ -110,11 +110,11 @@ if not exist "%INSTALLER%" (
 )
 
 set "VEN_INSTALL_LOG=%TEMP%\IllumioVENInstall.log"
-if "%INSTALL_DIR%"=="C:\Program Files\Illumio" (
-    "%INSTALLER%" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" >> "%LOG_FILE%" 2>&1
-) else (
-    "%INSTALLER%" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" INSTALLFOLDER="%INSTALL_DIR%" DATAFOLDER="%DATA_DIR%" >> "%LOG_FILE%" 2>&1
-)
+REM INSTALLFOLDER 與 DATAFOLDER 是獨立的安裝屬性，各自非預設值時才需要傳入
+set "EXTRA_ARGS="
+if not "%INSTALL_DIR%"=="C:\Program Files\Illumio" set "EXTRA_ARGS=INSTALLFOLDER="%INSTALL_DIR%""
+if not "%DATA_DIR%"=="C:\ProgramData\Illumio" set "EXTRA_ARGS=%EXTRA_ARGS% DATAFOLDER="%DATA_DIR%""
+"%INSTALLER%" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" %EXTRA_ARGS% >> "%LOG_FILE%" 2>&1
 
 if %errorlevel% neq 0 (
     call :Log [ERROR] 安裝失敗。Exit Code: %errorlevel%. 詳見日誌: %LOG_FILE%

@@ -131,13 +131,11 @@ try {
         Throw "找不到安裝檔: $InstallerPath"
     }
 
-    $defaultDir = "C:\Program Files\Illumio"
     $installerLog = "$env:TEMP\IllumioVENInstall.log"
-    if ($InstallDir -eq $defaultDir) {
-        $installArgs = @("/install", "/quiet", "/norestart", "/log", "`"$installerLog`"")
-    } else {
-        $installArgs = @("/install", "/quiet", "/norestart", "/log", "`"$installerLog`"", "INSTALLFOLDER=`"$InstallDir`"", "DATAFOLDER=`"$DataDir`"")
-    }
+    $installArgs = @("/install", "/quiet", "/norestart", "/log", "`"$installerLog`"")
+    # INSTALLFOLDER 與 DATAFOLDER 是獨立的安裝屬性，各自非預設值時才需要傳入
+    if ($InstallDir -ne "C:\Program Files\Illumio") { $installArgs += "INSTALLFOLDER=`"$InstallDir`"" }
+    if ($DataDir -ne "C:\ProgramData\Illumio") { $installArgs += "DATAFOLDER=`"$DataDir`"" }
 
     Write-Log "INFO" "安裝檔: $InstallerPath"
     $proc = Start-Process -FilePath $InstallerPath -ArgumentList $installArgs -Wait -PassThru
