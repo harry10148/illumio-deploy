@@ -44,13 +44,10 @@ if exist "%~dp0illumio-ca.crt" (
     )
 )
 
-REM 從內嵌憑證動態計算 SHA1 Thumbprint (適用於任何環境更換憑證)
+REM 憑證 Thumbprint 是 DER 編碼的 SHA1；certutil -hashfile 算的是 PEM 檔案位元組雜湊，兩者不同
+REM 改用 PowerShell 計算（certutil -dump 輸出會被語系在地化，不可解析）；憑證無效時 THUMBPRINT 為空
 set "THUMBPRINT="
-for /f "skip=1 delims=" %%A in ('certutil -hashfile "%TEMP_CERT%" SHA1') do (
-    if not defined THUMBPRINT set "THUMBPRINT=%%A"
-)
-REM 去除空白字元
-set "THUMBPRINT=!THUMBPRINT: =!"
+for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "(New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('%TEMP_CERT%')).Thumbprint" 2^>nul`) do set "THUMBPRINT=%%A"
 
 if defined THUMBPRINT (
     certutil -verifystore Root "!THUMBPRINT!" >nul 2>&1
