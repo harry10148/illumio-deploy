@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Illumio VEN Agent 自動部署腳本 — 方式二：手動安裝 (PowerShell)
 
