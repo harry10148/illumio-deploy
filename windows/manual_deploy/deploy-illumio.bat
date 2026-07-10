@@ -24,7 +24,7 @@ REM 將輸出同時導向到螢幕與檔案 (簡單做法: 建立 Log 函式)
 call :Log ============================================
 call :Log  Illumio VEN — 方式二：手動安裝 (Batch)
 call :Log ============================================
-call :Log.
+call :LogBlank
 
 REM === Step 1: 匯入憑證 ===
 call :Log [Step 1/3] 檢查並匯入自簽 CA 憑證...
@@ -73,7 +73,7 @@ del "%TEMP_CERT%" 2>nul
 
 :step2
 REM === Step 2: 安裝 VEN ===
-call :Log.
+call :LogBlank
 call :Log [Step 2/3] 安裝 Illumio VEN Agent...
 
 if "%SOURCE_DIR%"=="" (
@@ -116,7 +116,7 @@ if %errorlevel% neq 0 (
 call :Log [OK]     VEN Agent 安裝完成。
 
 REM === Step 3: 啟用 ===
-call :Log.
+call :LogBlank
 call :Log [Step 3/3] 啟用 VEN Agent...
 
 set "VEN_CTL=%INSTALL_DIR%\illumio-ven-ctl.exe"
@@ -142,7 +142,7 @@ if %errorlevel% neq 0 (
 )
 call :Log [OK]     啟用指令已送出。
 
-call :Log.
+call :LogBlank
 call :Log ============================================
 call :Log  部署完成! 日誌儲存於: %LOG_FILE%
 call :Log ============================================
@@ -156,4 +156,9 @@ REM ==========================================
 :Log
 echo %*
 echo [%DATE% %TIME%] %* >> "%LOG_FILE%"
+exit /b 0
+
+:LogBlank
+echo.
+>> "%LOG_FILE%" echo.
 exit /b 0
