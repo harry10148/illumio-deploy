@@ -3,6 +3,9 @@
 # Exit 0 if all pass; non-zero with file:section list on failure.
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)" || { echo "ERROR: must run inside a git repo" >&2; exit 1; }
+for d in pce ven cert platform; do
+  [[ -d "$ROOT/docs/$d" ]] || { echo "ERROR: missing directory: docs/$d" >&2; exit 1; }
+done
 fail=0
 REQUIRED=(
   '^## 1\. 目的與適用情境$'
@@ -21,6 +24,6 @@ while IFS= read -r -d '' f; do
     fi
   done
 done < <(find "$ROOT/docs/pce" "$ROOT/docs/ven" "$ROOT/docs/cert" "$ROOT/docs/platform" \
-            -maxdepth 1 -name '*.md' -print0 2>/dev/null)
+            -maxdepth 1 -name '*.md' -print0)
 [[ $fail -eq 0 ]] && echo "OK: all SOPs have §1–§7"
 exit $fail
