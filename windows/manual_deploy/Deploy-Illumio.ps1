@@ -139,8 +139,13 @@ try {
 
     Write-Log "INFO" "安裝檔: $InstallerPath"
     $proc = Start-Process -FilePath $InstallerPath -ArgumentList $installArgs -Wait -PassThru
-    if ($proc.ExitCode -ne 0) { Throw "安裝失敗。Exit Code: $($proc.ExitCode)" }
-    Write-Log "OK" "VEN Agent 安裝完成。"
+    if ($proc.ExitCode -eq 3010) {
+        Write-Log "OK" "VEN Agent 安裝完成 (Exit Code 3010: 需要重新開機)。"
+    } elseif ($proc.ExitCode -ne 0) {
+        Throw "安裝失敗。Exit Code: $($proc.ExitCode)"
+    } else {
+        Write-Log "OK" "VEN Agent 安裝完成。"
+    }
 
     # === Step 3: 啟用 ===
     Write-Log "INFO" ""

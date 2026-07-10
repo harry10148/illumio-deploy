@@ -116,12 +116,17 @@ if not "%INSTALL_DIR%"=="C:\Program Files\Illumio" set "EXTRA_ARGS=INSTALLFOLDER
 if not "%DATA_DIR%"=="C:\ProgramData\Illumio" set "EXTRA_ARGS=%EXTRA_ARGS% DATAFOLDER="%DATA_DIR%""
 "%INSTALLER%" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" %EXTRA_ARGS% >> "%LOG_FILE%" 2>&1
 
+if %errorlevel% equ 3010 (
+    call :Log [OK]     VEN Agent 安裝完成 ^(Exit Code 3010: 需要重新開機^)。
+    goto :step3
+)
 if %errorlevel% neq 0 (
     call :Log [ERROR] 安裝失敗。Exit Code: %errorlevel%. 詳見日誌: %LOG_FILE%
     exit /b %errorlevel%
 )
 call :Log [OK]     VEN Agent 安裝完成。
 
+:step3
 REM === Step 3: 啟用 ===
 call :LogBlank
 call :Log [Step 3/3] 啟用 VEN Agent...
