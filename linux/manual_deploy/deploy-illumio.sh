@@ -115,6 +115,17 @@ else
     print_info "使用腳本內嵌憑證"
 fi
 
+# 佔位符與格式防呆：避免把無效內容寫入系統信任區後仍回報成功
+if [[ "$CERT_CONTENT" == *PLACEHOLDER_CERTIFICATE_CONTENT* ]]; then
+    print_error "內嵌憑證仍為佔位符，且 $SCRIPT_DIR/illumio-ca.crt 不存在。"
+    print_error "請將實際 CA 憑證命名為 illumio-ca.crt 放在腳本同目錄，或替換腳本內嵌憑證。"
+    exit 1
+fi
+if command -v openssl &>/dev/null && ! echo "$CERT_CONTENT" | openssl x509 -noout 2>/dev/null; then
+    print_error "憑證內容不是有效的 PEM 憑證。"
+    exit 1
+fi
+
 case "$OS_TYPE" in
     rhel|centos|rocky|almalinux|ol) CERT_DIR="/etc/pki/ca-trust/source/anchors"; UPDATE_CMD="update-ca-trust force-enable && update-ca-trust extract" ;;
     ubuntu|debian) CERT_DIR="/usr/local/share/ca-certificates"; UPDATE_CMD="update-ca-certificates" ;;
