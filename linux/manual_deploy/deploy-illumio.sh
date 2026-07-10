@@ -45,6 +45,12 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# 必填參數 fail-fast：避免安裝完成後才發現未設定，留下已安裝未啟用的狀態
+if [ "$ACTIVATION_CODE" = "<YOUR_ACTIVATION_CODE>" ] || [ "$MANAGEMENT_SERVER" = "<YOUR_PCE_FQDN:PORT>" ]; then
+    print_error "請先修改腳本設定區的 ACTIVATION_CODE 和 MANAGEMENT_SERVER。"
+    exit 1
+fi
+
 # === Step 1: 偵測 OS ===
 print_header "Step 1/5: 偵測作業系統"
 
@@ -167,9 +173,6 @@ print_header "Step 5/5: 啟用 VEN Agent"
 
 VEN_CTL="/opt/illumio_ven/illumio-ven-ctl"
 if [ ! -f "$VEN_CTL" ]; then print_error "找不到 $VEN_CTL"; exit 1; fi
-if [ "$ACTIVATION_CODE" = "<YOUR_ACTIVATION_CODE>" ] || [ "$MANAGEMENT_SERVER" = "<YOUR_PCE_FQDN:PORT>" ]; then
-    print_error "請先設定 ACTIVATION_CODE 和 MANAGEMENT_SERVER。"; exit 1
-fi
 
 print_info "Server: $MANAGEMENT_SERVER"
 "$VEN_CTL" activate --management-server "$MANAGEMENT_SERVER" --activation-code "$ACTIVATION_CODE"

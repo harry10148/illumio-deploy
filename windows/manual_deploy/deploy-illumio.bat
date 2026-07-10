@@ -26,6 +26,16 @@ call :Log  Illumio VEN — 方式二：手動安裝 (Batch)
 call :Log ============================================
 call :LogBlank
 
+REM 必填參數 fail-fast：避免安裝完成後才發現未設定
+if "%ACTIVATION_CODE%"=="<YOUR_ACTIVATION_CODE>" (
+    call :Log [ERROR] 請先設定 ACTIVATION_CODE。
+    exit /b 1
+)
+if "%MANAGEMENT_SERVER%"=="<YOUR_PCE_FQDN:PORT>" (
+    call :Log [ERROR] 請先設定 MANAGEMENT_SERVER。
+    exit /b 1
+)
+
 REM === Step 1: 匯入憑證 ===
 call :Log [Step 1/3] 檢查並匯入自簽 CA 憑證...
 
@@ -120,15 +130,6 @@ set "VEN_CTL=%INSTALL_DIR%\illumio-ven-ctl.exe"
 if not exist "%VEN_CTL%" set "VEN_CTL=C:\Program Files\Illumio\illumio-ven-ctl.exe"
 if not exist "%VEN_CTL%" (
     call :Log [ERROR] 找不到 illumio-ven-ctl.exe
-    exit /b 1
-)
-
-if "%ACTIVATION_CODE%"=="<YOUR_ACTIVATION_CODE>" (
-    call :Log [ERROR] 請先設定 ACTIVATION_CODE。
-    exit /b 1
-)
-if "%MANAGEMENT_SERVER%"=="<YOUR_PCE_FQDN:PORT>" (
-    call :Log [ERROR] 請先設定 MANAGEMENT_SERVER。
     exit /b 1
 )
 

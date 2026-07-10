@@ -76,6 +76,11 @@ try {
     Write-Log "INFO" "安裝目錄: $InstallDir"
     Write-Log "INFO" "資料目錄: $DataDir"
 
+    # 必填參數 fail-fast：避免安裝完成後才發現未設定
+    if ($ActivationCode -eq "<YOUR_ACTIVATION_CODE>" -or $ManagementServer -eq "<YOUR_PCE_FQDN:PORT>") {
+        Throw "請先設定 ActivationCode 和 ManagementServer 參數。"
+    }
+
     # === Step 1: 匯入憑證 ===
     Write-Log "INFO" ""
     Write-Log "INFO" "[Step 1/3] 檢查並匯入自簽 CA 憑證..."
@@ -146,10 +151,6 @@ try {
     $TargetCtl = Join-Path $InstallDir "illumio-ven-ctl.exe"
     if (-not (Test-Path $TargetCtl)) { $TargetCtl = "C:\Program Files\Illumio\illumio-ven-ctl.exe" }
     if (-not (Test-Path $TargetCtl)) { Throw "找不到 illumio-ven-ctl.exe" }
-
-    if ($ActivationCode -eq "<YOUR_ACTIVATION_CODE>" -or $ManagementServer -eq "<YOUR_PCE_FQDN:PORT>") {
-        Throw "請先設定 ActivationCode 和 ManagementServer 參數。"
-    }
 
     & $TargetCtl activate -activation-code $ActivationCode -management-server $ManagementServer
     if ($LASTEXITCODE -ne 0) { Throw "啟用失敗。Exit Code: $LASTEXITCODE。請檢查網路、憑證與 Activation Code。" }
