@@ -7,7 +7,7 @@
 #   2. 檢查相依套件 — 缺件即停止 (不自動安裝、不連外)
 #   3. 匯入 PCE 的 CA 憑證 (未提供憑證則跳過，改用系統既有信任)
 #   4. 安裝前檢查到 PCE 的 TLS 連線 (信任鏈不通即停止，不留下半套安裝)
-#   5. 安裝 VEN 套件 (已安裝則跳過)
+#   5. 安裝 VEN 套件 (已安裝則跳過)；本機沒有安裝包時，改向 PCE 下載對應版本
 #   6. 向 PCE 啟用 (已啟用則跳過)
 #
 # 用法:
@@ -17,7 +17,7 @@
 #   參數未指定時依序取用: 環境變數 → 下方設定區。
 #   完整選項見 --help。可重複執行；全程不需互動。
 #
-# 只使用系統內建工具 (bash、coreutils、rpm/dpkg、curl)。
+# 只使用系統內建工具 (bash、coreutils、rpm/dpkg、curl)。除了 PCE 以外不連任何外部位址。
 ###############################################################################
 
 set -u
@@ -33,6 +33,8 @@ VEN_PACKAGE=""      # 安裝包檔名或絕對路徑；留空 = 自動尋找 *il
 CERT_FILE=""        # CA 憑證路徑；留空 = 腳本同目錄 illumio-ca.crt，其次內嵌憑證
 LOG_FILE="/var/log/illumio-deploy.log"
 SKIP_TLS_CHECK=0    # 1 = 略過安裝前的 PCE 連線檢查
+NO_DOWNLOAD=0       # 1 = 本機沒有安裝包時不向 PCE 下載，直接失敗
+API_VERSION="v25"   # 下載安裝包使用的 PCE API 版本 (較新的 PCE 仍接受較舊的版本)
 # ==========================================
 
 # 內嵌憑證 (選用)。保留佔位符 = 不使用內嵌憑證。
@@ -47,7 +49,6 @@ CERT_EOF
 EX_OK=0; EX_USAGE=2; EX_PRIV=3; EX_OS=4; EX_DEPS=5; EX_CERT=6; EX_NET=7; EX_INSTALL=8; EX_ACTIVATE=9
 
 VEN_DIR="/opt/illumio_ven"
-VEN_DATA_DIR="/opt/illumio_ven_data"
 VEN_CTL="$VEN_DIR/illumio-ven-ctl"
 
 usage() {
@@ -58,7 +59,9 @@ usage() {
   --activation-code CODE         啟用碼 (環境變數 ILLUMIO_ACTIVATION_CODE)
   --cert-file PATH               CA 憑證 (PEM)。預設: 腳本同目錄 illumio-ca.crt
   --source-dir DIR               安裝包所在目錄。預設: 腳本所在目錄
-  --package FILE                 安裝包檔名或絕對路徑。預設: 自動尋找
+  --package FILE                 安裝包檔名或絕對路徑。預設: 自動尋找；找不到則向 PCE 下載
+  --no-download                  本機沒有安裝包時不向 PCE 下載，直接失敗
+  --api-version vNN              下載安裝包使用的 PCE API 版本。預設: v25
   --log-file PATH                日誌檔。預設: /var/log/illumio-deploy.log
   --skip-tls-check               略過安裝前的 PCE TLS 連線檢查
   -h, --help                     顯示本說明
@@ -66,7 +69,7 @@ usage() {
 結束碼:
   0 成功 (含已安裝、已啟用而跳過)   2 參數錯誤        3 權限不足
   4 不支援的作業系統                5 相依套件缺失    6 憑證無效或匯入失敗
-  7 無法連線或無法驗證 PCE          8 安裝失敗        9 啟用失敗
+  7 無法連線或無法驗證 PCE          8 取得安裝包或安裝失敗            9 啟用失敗
 USAGE_EOF
 }
 
@@ -114,6 +117,8 @@ while [ $# -gt 0 ]; do
         --package)           need_value "$@"; VEN_PACKAGE="$2"; shift 2 ;;
         --log-file)          need_value "$@"; LOG_FILE="$2"; shift 2 ;;
         --skip-tls-check)    SKIP_TLS_CHECK=1; shift ;;
+        --no-download)       NO_DOWNLOAD=1; shift ;;
+        --api-version)       need_value "$@"; API_VERSION="$2"; shift 2 ;;
         -h|--help)           usage; exit "$EX_OK" ;;
         *) echo "[ERROR] 不認得的選項: $1" >&2; usage >&2; exit "$EX_USAGE" ;;
     esac
@@ -133,6 +138,7 @@ case "$MANAGEMENT_SERVER" in ''|'<'*) die "$EX_USAGE" "未設定 PCE 位址。�
 if ! [[ "$MANAGEMENT_SERVER" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then
     die "$EX_USAGE" "PCE 位址格式應為 主機名稱:埠號 (例如 pce.example.com:8443)，目前為: $MANAGEMENT_SERVER"
 fi
+[[ "$API_VERSION" =~ ^v[0-9]+$ ]] || die "$EX_USAGE" "--api-version 格式應為 vNN (例如 v25)，目前為: $API_VERSION"
 
 # ---------- Step 1: 偵測 OS ----------
 step "Step 1/6: 偵測作業系統"
@@ -170,7 +176,7 @@ if [ "$OS_FAMILY" = "rhel" ]; then
         REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
         PKG_INSTALL_CMD="yum install -y"
     else
-        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
+        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip iproute libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
         PKG_INSTALL_CMD="dnf install -y"
     fi
 else
@@ -284,22 +290,58 @@ if pkg_installed illumio-ven; then
 else
     PKG_EXT="rpm"; [ "$OS_FAMILY" = "debian" ] && PKG_EXT="deb"
     PKG_DIR="${SOURCE_DIR:-$SCRIPT_DIR}"
+    PKG_PATH=""
 
     if [ -n "$VEN_PACKAGE" ]; then
         case "$VEN_PACKAGE" in /*) PKG_PATH="$VEN_PACKAGE" ;; *) PKG_PATH="$PKG_DIR/$VEN_PACKAGE" ;; esac
+        [ -f "$PKG_PATH" ] || die "$EX_INSTALL" "找不到安裝包: $PKG_PATH"
     else
         shopt -s nullglob
         candidates=("$PKG_DIR"/*illumio-ven*."$PKG_EXT")
         shopt -u nullglob
-        if [ "${#candidates[@]}" -eq 0 ]; then
-            die "$EX_INSTALL" "在 $PKG_DIR 找不到 *illumio-ven*.$PKG_EXT。請放入安裝包，或用 --package 指定。"
-        elif [ "${#candidates[@]}" -gt 1 ]; then
+        if [ "${#candidates[@]}" -gt 1 ]; then
             for c in "${candidates[@]}"; do log ERROR "  候選: $c"; done
             die "$EX_INSTALL" "在 $PKG_DIR 找到多個安裝包，無法判斷要裝哪一個。請用 --package 指定。"
+        elif [ "${#candidates[@]}" -eq 1 ]; then
+            PKG_PATH="${candidates[0]}"
         fi
-        PKG_PATH="${candidates[0]}"
     fi
-    [ -f "$PKG_PATH" ] || die "$EX_INSTALL" "找不到安裝包: $PKG_PATH"
+
+    if [ -z "$PKG_PATH" ]; then
+        [ "$NO_DOWNLOAD" = "1" ] && die "$EX_INSTALL" "在 $PKG_DIR 找不到 *illumio-ven*.$PKG_EXT (已指定 --no-download)。"
+
+        # 與官方 pair.sh 相同的機制：以啟用碼向 PCE 的 VEN Library 取得符合本機的安裝包
+        case "$OS_ID" in
+            ubuntu) DL_DIST="Ubuntu"; DL_VER="$OS_VERSION" ;;
+            debian) DL_DIST="Debian"; DL_VER="$(cat /etc/debian_version 2>/dev/null)"; DL_VER="${DL_VER:-$OS_VERSION}" ;;
+            *)      if [ "$OS_FAMILY" = "rhel" ]; then DL_DIST="CentOS"; else DL_DIST="Debian"; fi; DL_VER="$OS_VERSION" ;;
+        esac
+        DL_ARCH="$(uname -m)"
+        DL_DIR="$(mktemp -d)" || die "$EX_INSTALL" "無法建立暫存目錄。"
+        trap 'rm -rf "$DL_DIR"' EXIT
+        log INFO "本機沒有安裝包，向 PCE 下載 [$DL_ARCH][$DL_DIST][$DL_VER]"
+
+        # 啟用碼經由 stdin 的 curl 設定傳入，不出現在程序清單
+        http_code=$(printf 'user = "agent_0:%s"\n' "$ACTIVATION_CODE" | curl -sS -K - \
+            --connect-timeout 10 --max-time 900 -D "$DL_DIR/headers" -o "$DL_DIR/package" -w '%{http_code}' \
+            "https://$MANAGEMENT_SERVER/api/$API_VERSION/software/ven/image?architecture=$DL_ARCH&distribution=$DL_DIST&version=$DL_VER" 2>> "$LOG_FILE")
+        case "$http_code" in
+            200) ;;
+            401|403) die "$EX_INSTALL" "PCE 拒絕下載 (HTTP $http_code)。請確認啟用碼有效且未過期。" ;;
+            406) die "$EX_INSTALL" "PCE 的 VEN Library 沒有符合 [$DL_ARCH][$DL_DIST][$DL_VER] 的安裝包。請自行提供安裝包 (--package)。" ;;
+            *)   die "$EX_INSTALL" "安裝包下載失敗 (HTTP ${http_code:-無回應})。" ;;
+        esac
+
+        dl_sha=$(grep -i '^x-sha256:' "$DL_DIR/headers" | tr -d '\r' | awk '{print $2}')
+        dl_name=$(grep -i '^content-disposition:' "$DL_DIR/headers" | tr -d '\r' | sed 's/.*filename=//; s/"//g')
+        dl_name="${dl_name##*/}"
+        [ -n "$dl_sha" ] && [ -n "$dl_name" ] || die "$EX_INSTALL" "PCE 回應缺少檔名或 SHA256 標頭，無法驗證安裝包。"
+        got_sha=$(sha256sum "$DL_DIR/package" | awk '{print $1}')
+        [ "$got_sha" = "$dl_sha" ] || die "$EX_INSTALL" "安裝包 SHA256 不符 (預期 $dl_sha，實際 $got_sha)。"
+        PKG_PATH="$DL_DIR/$dl_name"
+        mv "$DL_DIR/package" "$PKG_PATH"
+        log OK "已下載並通過 SHA256 驗證: $dl_name"
+    fi
 
     log INFO "安裝: $PKG_PATH"
     if [ "$OS_FAMILY" = "rhel" ]; then
@@ -317,9 +359,11 @@ step "Step 6/6: 向 PCE 啟用"
 
 [ -x "$VEN_CTL" ] || die "$EX_ACTIVATE" "找不到 $VEN_CTL，VEN 可能未正確安裝。"
 
-# 已配對的 VEN 會在資料目錄留下 agent_id.cfg；再次 activate 會失敗，故直接跳過
-if [ -s "$VEN_DATA_DIR/etc/agent_id.cfg" ]; then
-    log SKIP "VEN 已啟用 (存在 $VEN_DATA_DIR/etc/agent_id.cfg)，跳過啟用。"
+# 未配對的 VEN 回報 "Agent state: unpaired"；其他狀態 (idle、illuminated、enforced 等) 代表已配對，
+# 再次 activate 會失敗，故直接跳過
+AGENT_STATE=$("$VEN_CTL" status 2>/dev/null | sed -n 's/^Agent state: *//p' | head -1)
+if [ -n "$AGENT_STATE" ] && [ "$AGENT_STATE" != "unpaired" ]; then
+    log SKIP "VEN 已啟用 (Agent state: $AGENT_STATE)，跳過啟用。"
 else
     log INFO "PCE: $MANAGEMENT_SERVER"
     "$VEN_CTL" activate --management-server "$MANAGEMENT_SERVER" --activation-code "$ACTIVATION_CODE" 2>&1 | tee -a "$LOG_FILE"

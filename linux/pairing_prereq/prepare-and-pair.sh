@@ -132,7 +132,7 @@ if [ "$OS_FAMILY" = "rhel" ]; then
         REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
         PKG_INSTALL_CMD="yum install -y"
     else
-        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
+        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip iproute libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
         PKG_INSTALL_CMD="dnf install -y"
     fi
 else
