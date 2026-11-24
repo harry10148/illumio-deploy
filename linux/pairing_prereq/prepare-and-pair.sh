@@ -4,7 +4,8 @@
 #
 # 在執行 Illumio 官方配對腳本 (pair.sh) 之前使用:
 #   1. 偵測 OS (RHEL 系 / Debian 系)
-#   2. 檢查相依套件 (預設只報告；加 --strict 則缺件時以結束碼 5 結束)
+#   2. 檢查原廠支援表列出的相依套件 (預設只報告；加 --strict 則缺件時以結束碼 5 結束)
+#      實際需求以安裝包的宣告為準，官方 pair.sh 安裝時會再檢查一次
 #   3. 匯入 PCE 的 CA 憑證 (內容相同則跳過)
 #
 # 用法:
@@ -120,25 +121,36 @@ case "$OS_ID" in
 esac
 [ -n "$OS_FAMILY" ] || die "$EX_OS" "不支援的作業系統: ${OS_ID:-未知} ${OS_VERSION}"
 
-OS_MAJOR="${OS_VERSION%%.*}"
 log INFO "作業系統: $OS_ID $OS_VERSION ($OS_FAMILY 系)"
 
 # ---------- Step 2: 相依套件 ----------
 step "Step 2/3: 檢查相依套件"
 
-# 以 | 分隔的名稱視為同一項需求的替代套件，任一已安裝即可
-if [ "$OS_FAMILY" = "rhel" ]; then
-    if [[ "$OS_MAJOR" =~ ^[0-9]+$ ]] && [ "$OS_MAJOR" -le 7 ]; then
-        REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
-        PKG_INSTALL_CMD="yum install -y"
+# 原廠「VEN OS Support and Package Dependencies」支援表列出的套件。
+# 以 | 分隔的名稱視為同一項需求的替代套件，任一已安裝即可。
+vendor_pkg_list() {
+    local major="${OS_VERSION%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] || major=99
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        if [ "$major" -le 7 ]; then
+            echo "bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed"
+        else
+            echo "bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux"
+        fi
+    elif [ "$OS_ID" = "debian" ] && [ "$major" -lt 12 ]; then
+        echo "apt-transport-https curl dnsutils|bind9-dnsutils libcap2 libgmp10 libmnl0 libnfnetlink0 ipset net-tools sed uuid-runtime"
     else
-        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip iproute libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
-        PKG_INSTALL_CMD="dnf install -y"
+        # Debian 12+、Ubuntu：apt 1.5 起已內建 HTTPS，不再需要 apt-transport-https
+        echo "curl dnsutils|bind9-dnsutils libcap2 libgmp10 libmnl0 libnfnetlink0 ipset net-tools sed uuid-runtime"
     fi
+}
+
+if [ "$OS_FAMILY" = "rhel" ]; then
+    if [ "${OS_VERSION%%.*}" = "7" ]; then PKG_INSTALL_CMD="yum install -y"; else PKG_INSTALL_CMD="dnf install -y"; fi
 else
-    REQUIRED_PKGS=("dnsutils|bind9-dnsutils" curl libgmp10 ipset iptables "libcap2" libmnl0 libnfnetlink0 net-tools sed uuid-runtime)
     PKG_INSTALL_CMD="apt-get install -y"
 fi
+read -r -a REQUIRED_PKGS <<< "$(vendor_pkg_list)"
 
 pkg_installed() {
     if [ "$OS_FAMILY" = "rhel" ]; then

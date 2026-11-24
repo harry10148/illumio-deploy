@@ -4,11 +4,12 @@
 #
 # 流程:
 #   1. 偵測 OS (RHEL 系 / Debian 系)
-#   2. 檢查相依套件 — 缺件即停止 (不自動安裝、不連外)
-#   3. 匯入 PCE 的 CA 憑證 (未提供憑證則跳過，改用系統既有信任)
-#   4. 安裝前檢查到 PCE 的 TLS 連線 (信任鏈不通即停止，不留下半套安裝)
-#   5. 安裝 VEN 套件 (已安裝則跳過)；本機沒有安裝包時，改向 PCE 下載對應版本
-#   6. 向 PCE 啟用 (已啟用則跳過)
+#   2. 匯入 PCE 的 CA 憑證 (未提供憑證則跳過，改用系統既有信任)
+#   3. 安裝前檢查到 PCE 的 TLS 連線 (信任鏈不通即停止，不留下半套安裝)
+#   4. 安裝 VEN 套件 (已安裝則跳過)
+#        - 本機沒有安裝包時，向 PCE 下載符合本機的版本並驗證 SHA256
+#        - 以 rpm/dpkg 試裝檢查相依套件，缺件即停止 (不自動安裝)
+#   5. 向 PCE 啟用 (已啟用則跳過)
 #
 # 用法:
 #   sudo bash deploy-illumio.sh --management-server pce.example.com:8443 \
@@ -141,7 +142,7 @@ fi
 [[ "$API_VERSION" =~ ^v[0-9]+$ ]] || die "$EX_USAGE" "--api-version 格式應為 vNN (例如 v25)，目前為: $API_VERSION"
 
 # ---------- Step 1: 偵測 OS ----------
-step "Step 1/6: 偵測作業系統"
+step "Step 1/5: 偵測作業系統"
 
 OS_ID=""; OS_LIKE=""; OS_VERSION=""
 if [ -r /etc/os-release ]; then
@@ -164,25 +165,7 @@ case "$OS_ID" in
 esac
 [ -n "$OS_FAMILY" ] || die "$EX_OS" "不支援的作業系統: ${OS_ID:-未知} ${OS_VERSION}"
 
-OS_MAJOR="${OS_VERSION%%.*}"
 log INFO "作業系統: $OS_ID $OS_VERSION ($OS_FAMILY 系)"
-
-# ---------- Step 2: 相依套件 ----------
-step "Step 2/6: 檢查相依套件"
-
-# 以 | 分隔的名稱視為同一項需求的替代套件，任一已安裝即可
-if [ "$OS_FAMILY" = "rhel" ]; then
-    if [[ "$OS_MAJOR" =~ ^[0-9]+$ ]] && [ "$OS_MAJOR" -le 7 ]; then
-        REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
-        PKG_INSTALL_CMD="yum install -y"
-    else
-        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip iproute libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
-        PKG_INSTALL_CMD="dnf install -y"
-    fi
-else
-    REQUIRED_PKGS=("dnsutils|bind9-dnsutils" curl libgmp10 ipset iptables "libcap2" libmnl0 libnfnetlink0 net-tools sed uuid-runtime)
-    PKG_INSTALL_CMD="apt-get install -y"
-fi
 
 pkg_installed() {
     if [ "$OS_FAMILY" = "rhel" ]; then
@@ -192,30 +175,29 @@ pkg_installed() {
     fi
 }
 
-MISSING_PKGS=()
-for spec in "${REQUIRED_PKGS[@]}"; do
-    found=""
-    IFS='|' read -r -a alternatives <<< "$spec"
-    for pkg in "${alternatives[@]}"; do
-        if pkg_installed "$pkg"; then found="$pkg"; break; fi
-    done
-    if [ -n "$found" ]; then
-        log OK "$found"
+# 原廠「VEN OS Support and Package Dependencies」支援表列出的套件。
+# 以 | 分隔的名稱視為同一項需求的替代套件，任一已安裝即可。
+vendor_pkg_list() {
+    local major="${OS_VERSION%%.*}"
+    [[ "$major" =~ ^[0-9]+$ ]] || major=99
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        if [ "$major" -le 7 ]; then
+            echo "bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed"
+        else
+            echo "bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux"
+        fi
+    elif [ "$OS_ID" = "debian" ] && [ "$major" -lt 12 ]; then
+        echo "apt-transport-https curl dnsutils|bind9-dnsutils libcap2 libgmp10 libmnl0 libnfnetlink0 ipset net-tools sed uuid-runtime"
     else
-        log FAIL "${alternatives[0]} (未安裝)"
-        MISSING_PKGS+=("${alternatives[0]}")
+        # Debian 12+、Ubuntu：apt 1.5 起已內建 HTTPS，不再需要 apt-transport-https
+        echo "curl dnsutils|bind9-dnsutils libcap2 libgmp10 libmnl0 libnfnetlink0 ipset net-tools sed uuid-runtime"
     fi
-done
+}
 
-if [ "${#MISSING_PKGS[@]}" -gt 0 ]; then
-    log ERROR "請先安裝缺少的套件後重新執行:"
-    log ERROR "  $PKG_INSTALL_CMD ${MISSING_PKGS[*]}"
-    die "$EX_DEPS" "缺少 ${#MISSING_PKGS[@]} 個相依套件。"
-fi
-log OK "相依套件齊全。"
+command -v curl > /dev/null 2>&1 || die "$EX_DEPS" "找不到 curl。請先安裝 curl 套件。"
 
-# ---------- Step 3: CA 憑證 ----------
-step "Step 3/6: 匯入 CA 憑證"
+# ---------- Step 2: CA 憑證 ----------
+step "Step 2/5: 匯入 CA 憑證"
 
 CERT_CONTENT=""; CERT_SOURCE=""
 if [ -n "$CERT_FILE" ]; then
@@ -262,8 +244,8 @@ else
     fi
 fi
 
-# ---------- Step 4: 安裝前連線檢查 ----------
-step "Step 4/6: 檢查 PCE 連線與憑證信任"
+# ---------- Step 3: 安裝前連線檢查 ----------
+step "Step 3/5: 檢查 PCE 連線與憑證信任"
 
 if [ "$SKIP_TLS_CHECK" = "1" ]; then
     log SKIP "已指定略過 TLS 連線檢查。"
@@ -282,8 +264,8 @@ else
     esac
 fi
 
-# ---------- Step 5: 安裝 VEN ----------
-step "Step 5/6: 安裝 VEN 套件"
+# ---------- Step 4: 安裝 VEN ----------
+step "Step 4/5: 安裝 VEN 套件"
 
 if pkg_installed illumio-ven; then
     log SKIP "VEN 已安裝，跳過安裝。"
@@ -343,19 +325,48 @@ else
         log OK "已下載並通過 SHA256 驗證: $dl_name"
     fi
 
+    # 相依套件以安裝包本身的宣告為準：用套件管理員試裝，不實際變更系統
+    log INFO "檢查相依套件: $(basename "$PKG_PATH")"
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        dep_out=$(rpm -i --test --nosignature "$PKG_PATH" 2>&1); dep_rc=$?
+    else
+        dep_out=$(dpkg --dry-run -i "$PKG_PATH" 2>&1); dep_rc=$?
+    fi
+    if [ "$dep_rc" -ne 0 ]; then
+        while IFS= read -r line; do [ -n "$line" ] && log ERROR "  $line"; done <<< "$dep_out"
+        if [ "$OS_FAMILY" = "debian" ]; then
+            log ERROR "安裝包宣告的相依套件: $(dpkg-deb -f "$PKG_PATH" Pre-Depends Depends 2>/dev/null | tr '\n' ' ')"
+        fi
+        die "$EX_DEPS" "相依套件不足或安裝包不適用於本機。請先安裝上列套件後重新執行。"
+    fi
+    log OK "安裝包宣告的相依套件齊全。"
+
+    # 原廠支援表另外列出的套件：安裝包未宣告，缺少時只提醒、不中止
+    advisory_missing=()
+    read -r -a vendor_pkgs <<< "$(vendor_pkg_list)"
+    for spec in "${vendor_pkgs[@]}"; do
+        found=""
+        IFS='|' read -r -a alternatives <<< "$spec"
+        for pkg in "${alternatives[@]}"; do pkg_installed "$pkg" && { found=1; break; }; done
+        [ -n "$found" ] || advisory_missing+=("${alternatives[0]}")
+    done
+    if [ "${#advisory_missing[@]}" -gt 0 ]; then
+        log WARN "原廠支援表列出、但本機未安裝的套件 (不影響安裝，僅供參考): ${advisory_missing[*]}"
+    fi
+
     log INFO "安裝: $PKG_PATH"
     if [ "$OS_FAMILY" = "rhel" ]; then
         rpm -ivh "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
     else
-        dpkg -i "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
+        DEBIAN_FRONTEND=noninteractive dpkg -i "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
     fi
     install_rc="${PIPESTATUS[0]}"
     [ "$install_rc" -eq 0 ] || die "$EX_INSTALL" "套件安裝失敗 (結束碼 $install_rc)。"
     log OK "VEN 安裝完成。"
 fi
 
-# ---------- Step 6: 啟用 ----------
-step "Step 6/6: 向 PCE 啟用"
+# ---------- Step 5: 啟用 ----------
+step "Step 5/5: 向 PCE 啟用"
 
 [ -x "$VEN_CTL" ] || die "$EX_ACTIVATE" "找不到 $VEN_CTL，VEN 可能未正確安裝。"
 
