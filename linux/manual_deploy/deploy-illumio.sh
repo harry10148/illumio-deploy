@@ -8,7 +8,8 @@
 #   3. 安裝前檢查到 PCE 的 TLS 連線 (信任鏈不通即停止，不留下半套安裝)
 #   4. 安裝 VEN 套件 (已安裝則跳過)
 #        - 本機沒有安裝包時，向 PCE 下載符合本機的版本並驗證 SHA256
-#        - 以 rpm/dpkg 試裝檢查相依套件，缺件即停止 (不自動安裝)
+#        - 以 rpm/dpkg 試裝檢查相依套件，缺件即停止並列出建議的安裝指令
+#          (本腳本絕不自行安裝作業系統套件)
 #   5. 向 PCE 啟用 (已啟用則跳過)
 #
 # 用法:
@@ -358,10 +359,17 @@ else
     fi
     if [ "$dep_rc" -ne 0 ]; then
         while IFS= read -r line; do [ -n "$line" ] && log ERROR "  $line"; done <<< "$dep_out"
-        if [ "$OS_FAMILY" = "debian" ]; then
-            log ERROR "安裝包宣告的相依套件: $(dpkg-deb -f "$PKG_PATH" Pre-Depends Depends 2>/dev/null | tr '\n' ' ')"
+        # 只提供建議的安裝指令，本腳本不會自行安裝任何作業系統套件
+        if [ "$OS_FAMILY" = "rhel" ]; then
+            needed=$(printf '%s\n' "$dep_out" | sed -n 's/^[[:space:]]*\(.*\) is needed by .*/\1/p' | sed "s/.*/'&'/" | tr '\n' ' ')
+            pkg_tool="dnf"; command -v dnf > /dev/null 2>&1 || pkg_tool="yum"
+            [ -n "$needed" ] && log ERROR "建議的安裝指令: $pkg_tool install -y $needed"
+        else
+            # dpkg 一次只回報一個缺件，所以列出安裝包宣告的完整清單 (有替代套件時取第一個)
+            declared=$(dpkg-deb -f "$PKG_PATH" Pre-Depends Depends 2>/dev/null | sed 's/^[A-Za-z-]*: //' | tr ',' '\n' | sed 's/|.*//; s/(.*//; s/[[:space:]]//g' | grep -v '^$' | sort -u | tr '\n' ' ')
+            [ -n "$declared" ] && log ERROR "建議的安裝指令: apt-get install -y $declared"
         fi
-        die "$EX_DEPS" "相依套件不足或安裝包不適用於本機。請先安裝上列套件後重新執行。"
+        die "$EX_DEPS" "相依套件不足或安裝包不適用於本機。本腳本不會自動安裝套件，請自行安裝後重新執行。"
     fi
     log OK "安裝包宣告的相依套件齊全。"
 

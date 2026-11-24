@@ -1,231 +1,89 @@
-[English](#english) | [繁體中文](#繁體中文)
+# Illumio VEN 部署腳本與維運手冊
 
----
+跨平台（Windows、Linux、AIX）的 Illumio VEN 部署腳本，以及 PCE、VEN、憑證、平台整合的維運 SOP。
 
-<span id="繁體中文"></span>
+[English summary](#english-summary)
 
-# Illumio VEN Agent 自動化部署指南
-
-本專案提供跨平台 (Windows / Linux / AIX) 的 Illumio VEN Agent 自動化部署腳本及手冊。所有腳本都已包含**自簽憑證自動匯入**與**防重複檢查**機制，確保 VEN 能夠順利與 PCE 建立安全連線。
-
-每個作業系統下分為兩種部署方式，請根據您的環境需求選擇適合的方式：
-
----
-
-## 目錄結構
+## 內容
 
 ```
 linux/
-├── pairing_prereq/    # 方式一：官方配對前置腳本 (憑證匯入 + 套件檢查)
-│   ├── README.md
-│   └── prepare-and-pair.sh
-└── manual_deploy/     # 方式二：完整手動部署腳本 (安裝 + 憑證匯入 + 啟用)
-    ├── README.md
-    └── deploy-illumio.sh
-
+├── manual_deploy/deploy-illumio.sh       完整部署：憑證 → 連線檢查 → 安裝 → 啟用
+└── pairing_prereq/prepare-and-pair.sh    官方配對前置：相依套件檢查 + 憑證
 windows/
-├── pairing_prereq/    # 方式一：官方配對前置腳本 (憑證匯入)
-│   ├── README.md
-│   └── Import-RootCA.ps1
-└── manual_deploy/     # 方式二：完整手動部署腳本 (安裝 + 憑證匯入 + 啟用)
-    ├── README.md
-    ├── Deploy-Illumio.ps1
-    └── deploy-illumio.bat
-
-aix/
-├── pairing_prereq/    # 方式一：官方配對前置作業說明
-│   └── README.md
-└── manual_deploy/     # 方式二：完整手動部署說明 (含 IPFilter)
-    └── README.md
-
-docs/
-├── README.md              # 索引
-├── SOP-TEMPLATE.md        # SOP 模板
-├── pce/                   # PCE 伺服器端 SOP (7 份)
-├── ven/                   # VEN 端點 SOP (6 份)
-├── cert/                  # 憑證與 SSL (3 份)
-├── platform/              # K8s / FlowLink / Linux (5 份)
-└── guide/                 # 原廠手冊本機快取 (gitignored)
+├── manual_deploy/Deploy-Illumio.ps1      完整部署 (PowerShell)
+├── manual_deploy/deploy-illumio.bat      完整部署 (純 cmd)
+└── pairing_prereq/Import-RootCA.ps1      官方配對前置：憑證
+aix/                                      無腳本，步驟見手冊
+docs/                                     手冊與 SOP，索引見 docs/README.md
+scripts/                                  文件與腳本的檢查工具
 ```
 
-完整 SOP 索引見 [`docs/README.md`](docs/README.md)
+## 從哪裡開始
 
----
+| 我要… | 看這裡 |
+|---|---|
+| 在 Linux 安裝 VEN | [Linux 安裝](docs/ven/install-linux.md) |
+| 在 Windows 安裝 VEN | [Windows 安裝](docs/ven/install-windows.md) |
+| 在 AIX 安裝 VEN | [AIX 安裝](docs/ven/install-aix.md) |
+| 用 SCCM、Intune、群組原則、Ansible 大量派送 | [大規模派送](docs/ven/mass-deployment.md) |
+| 確認作業系統與相依套件 | [VEN 作業系統支援與相依套件](docs/reference/ven-os-support.md) |
+| 找 PCE、憑證、Kubernetes 等其他 SOP | [手冊索引](docs/README.md) |
 
-## 部署方式說明
+## 兩種部署方式
 
-### 🌟 方式一：官方配對前置 (`pairing_prereq/`)
+| | 完整部署（`manual_deploy/`） | 官方配對前置（`pairing_prereq/`） |
+|---|---|---|
+| 腳本做的事 | 憑證、連線檢查、安裝、啟用全部完成 | 只處理憑證（Linux 另含相依套件檢查） |
+| VEN 由誰安裝 | 腳本 | PCE 產生的官方配對指令 |
+| 適用情境 | 大量派送、封閉環境、自訂安裝目錄 | 少量主機、手動操作 |
 
-> 適用情境：目標主機能直接連線至 PCE，且您希望使用 Illumio 官方內建的配對腳本 (`pair.ps1` / `pair.sh` / `pair.aix.sh`)。
-> 本方式的腳本負責處理**前置作業**（憑證匯入、相依套件檢查），完成後再執行官方配對腳本。
+## 快速開始
 
-### 🔧 方式二：完整手動部署 (`manual_deploy/`)
+準備 PCE 位址（`FQDN:PORT`）與 Pairing Profile 產生的啟用碼。PCE 使用私有 CA 時，另外準備 CA 憑證並命名為 `illumio-ca.crt`，放在腳本同目錄。
 
-> 適用情境：封閉環境、需要自訂安裝目錄，或需使用實體安裝包 (`.exe` / `.rpm` / `.deb` / `installp`) 部署。
-> 本方式的腳本一鍵完成「憑證匯入 → 安裝 VEN → 啟用回報」全流程。
-
----
-
-## 各平台操作手冊
-
-| 平台 | 方式一：官方配對前置 | 方式二：完整手動部署 |
-|------|---------------------|---------------------|
-| **Windows** | [📄 操作手冊](windows/pairing_prereq/README.md) | [📄 操作手冊](windows/manual_deploy/README.md) |
-| **Linux** | [📄 操作手冊](linux/pairing_prereq/README.md) | [📄 操作手冊](linux/manual_deploy/README.md) |
-| **AIX** | [📄 操作手冊](aix/pairing_prereq/README.md) | [📄 操作手冊](aix/manual_deploy/README.md) |
-
----
-
-## 系統前置需求
-
-部署前請確認各主機符合以下條件：
-
-| 項目 | 需求 |
-|------|------|
-| **磁碟空間** | 保留至少 **10 GB** 供 VEN 及資料存放使用 |
-| **時間同步** | NTP（Linux/AIX）或 Windows Time Service 必須正常運作，避免 TLS 時間差問題 |
-| **TLS 版本** | VEN ↔ PCE 最低需 **TLS 1.2** |
-| **憑證信任** | 需匯入 PCE 根 CA 憑證，VEN 必須能驗證完整的憑證信任鏈 |
-
-### 網路埠需求
-
-| 部署類型 | 埠號 | 用途 |
-|----------|------|------|
-| **本地部署 (On-Prem)** | TCP **8443** | VEN → PCE REST API (HTTPS) |
-| **本地部署 (On-Prem)** | TCP **8444** | VEN → PCE 長連線 (TLS-over-TCP) |
-| **SaaS 部署** | TCP **443** | REST API + 長連線（合併使用單一埠） |
-| **SecureConnect (選用)** | UDP **500** + UDP **4500** | VEN 之間 IPsec 加密通訊 (IKE/NAT-T) |
-
-> **TLS 攔截注意**：若防火牆或 Proxy 啟用 TLS 深度封包檢測（MITM），請針對 VEN ↔ PCE 流量**關閉 TLS 檢查**。轉發的偽造憑證不包含完整憑證鏈，將導致 VEN 無法完成 TLS 握手。
-
----
-
-## 🚀 快速開始
-
-1. 取得 PCE 簽發的 **CA 憑證** (`illumio-ca.crt`)。
-2. 取得一組有效的 **Activation Code** 與您的 **PCE FQDN:PORT** (例如 `pce.example.com:8443`)。
-3. 依平台進入對應目錄，參閱 `README.md` 操作手冊。
-4. **憑證提供方式（兩種擇一）**：
-   - **建議**：直接將 `illumio-ca.crt` 放在腳本同目錄，腳本會自動載入（無需修改腳本內容）。
-   - 替代：打開腳本 (`.ps1`, `.sh`, `.bat`)，將其中的憑證內容 (`-----BEGIN CERTIFICATE-----...`) 替換為您的環境憑證。
-5. 設定 Activation Code 與 PCE 位址：將 `<YOUR_ACTIVATION_CODE>` 與 `<YOUR_PCE_FQDN:PORT>` 取代為實際值（PowerShell 也可用參數傳入）。
-
-> 所有腳本都內建**自動防重複匯入**機制：Linux 比對憑證內容，Windows 比對 SHA1 Thumbprint。替換憑證後重複執行腳本不會產生重複信任根。
-
----
-
-<br><br><br>
-
-<span id="english"></span>
-
-# Illumio VEN Agent Automated Deployment Guide
-
-[English](#english) | [繁體中文](#繁體中文)
-
----
-
-This project provides cross-platform (Windows / Linux / AIX) automated deployment scripts and manuals for the Illumio VEN Agent. All scripts include mechanisms for **automatic self-signed certificate import** and **duplicate prevention**, ensuring the VEN can establish a secure connection with the PCE.
-
-Each platform contains two deployment approaches. Choose the one that best suits your environment:
-
----
-
-## Directory Structure
-
-```
-linux/
-├── pairing_prereq/    # Method 1: Pre-pairing prerequisites (cert import + dependency check)
-│   ├── README.md
-│   └── prepare-and-pair.sh
-└── manual_deploy/     # Method 2: Full standalone deployment (install + cert + activate)
-    ├── README.md
-    └── deploy-illumio.sh
-
-windows/
-├── pairing_prereq/    # Method 1: Pre-pairing prerequisites (cert import)
-│   ├── README.md
-│   └── Import-RootCA.ps1
-└── manual_deploy/     # Method 2: Full standalone deployment (install + cert + activate)
-    ├── README.md
-    ├── Deploy-Illumio.ps1
-    └── deploy-illumio.bat
-
-aix/
-├── pairing_prereq/    # Method 1: Pre-pairing prerequisites guide
-│   └── README.md
-└── manual_deploy/     # Method 2: Full standalone deployment guide (incl. IPFilter)
-    └── README.md
-
-docs/
-├── README.md              # Index
-├── SOP-TEMPLATE.md        # SOP template
-├── pce/                   # PCE server-side SOPs (7 docs)
-├── ven/                   # VEN endpoint SOPs (6 docs)
-├── cert/                  # Certificates & SSL (3 docs)
-├── platform/              # K8s / FlowLink / Linux (5 docs)
-└── guide/                 # Vendor manuals local cache (gitignored)
+```bash
+# Linux
+sudo bash linux/manual_deploy/deploy-illumio.sh \
+    --management-server <PCE_FQDN>:<PORT> --activation-code <ACTIVATION_CODE>
 ```
 
-Full SOP index: [`docs/README.md`](docs/README.md)
+```powershell
+# Windows
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File windows\manual_deploy\Deploy-Illumio.ps1 `
+    -ManagementServer <PCE_FQDN>:<PORT> -ActivationCode <ACTIVATION_CODE>
+```
+
+本機沒有安裝檔時，腳本會以啟用碼向 PCE 下載符合本機的版本。
+
+## 腳本的共同特性
+
+- 不需互動，可重複執行；已完成的步驟會跳過。
+- 先檢查參數、權限、憑證與 PCE 連線，全部通過才安裝。
+- 各平台一致的結束碼，見 [大規模派送 §結束碼](docs/ven/mass-deployment.md#結束碼)。
+- 只使用作業系統內建的工具，除了 PCE 以外不連任何外部位址。
+- 啟用碼不寫入日誌。
+
+## 驗證狀態
+
+腳本於 2026-11-24 對 lab PCE（26.2）實機驗證：Windows Server 2022、CentOS Stream 8（SELinux Enforcing）、Ubuntu 24.04。沒有測試機的平台與未實測的部分，記載在各手冊的「與原廠差異」章節。
+
+## 維護
+
+新增或修改 SOP 時依 [SOP 模板](docs/SOP-TEMPLATE.md)，提交前執行：
+
+```bash
+./scripts/check-docs.sh
+```
 
 ---
 
-## Deployment Methods
+## English summary
 
-### 🌟 Method 1: Pre-Pairing Prerequisites (`pairing_prereq/`)
+Deployment scripts for the Illumio VEN on Windows and Linux (AIX is documented, not scripted), plus operational runbooks for the PCE, VEN, certificates and platform integrations. The documentation is written in Traditional Chinese.
 
-> **Use Case**: Target hosts can connect directly to the PCE and you want to use Illumio's official pairing scripts (`pair.ps1` / `pair.sh` / `pair.aix.sh`).
-> These scripts handle the **prerequisites** (certificate import, dependency checks) before you run the official pairing command.
+- `manual_deploy/` scripts run the whole flow: CA certificate import, a pre-install connectivity check against the PCE, silent installation and activation. When no installer is present they download the matching package from the PCE using the activation code.
+- `pairing_prereq/` scripts only prepare a host (certificate, and dependency checks on Linux) before you run the pairing command generated by the PCE.
+- All scripts are non-interactive and idempotent, use only tools built into the operating system, and return the same exit codes on every platform. See [mass deployment](docs/ven/mass-deployment.md) for the exit code table and for SCCM, Intune, Group Policy and Ansible usage.
 
-### 🔧 Method 2: Full Manual Deployment (`manual_deploy/`)
-
-> **Use Case**: Offline environments, custom installation directories, or deployment using physical packages (`.exe` / `.rpm` / `.deb` / `installp`).
-> These scripts complete the full flow in one shot: certificate import → VEN installation → activation.
-
----
-
-## Manuals by Platform
-
-| Platform | Method 1: Pre-Pairing Prereqs | Method 2: Full Manual Deploy |
-|----------|-------------------------------|------------------------------|
-| **Windows** | [📄 User Manual](windows/pairing_prereq/README.md) | [📄 User Manual](windows/manual_deploy/README.md) |
-| **Linux** | [📄 User Manual](linux/pairing_prereq/README.md) | [📄 User Manual](linux/manual_deploy/README.md) |
-| **AIX** | [📄 User Manual](aix/pairing_prereq/README.md) | [📄 User Manual](aix/manual_deploy/README.md) |
-
----
-
-## System Prerequisites
-
-Before deploying, ensure each target host meets the following requirements:
-
-| Item | Requirement |
-|------|-------------|
-| **Disk Space** | Reserve at least **10 GB** for the VEN and its data |
-| **Time Sync** | NTP (Linux/AIX) or Windows Time Service must be running to prevent TLS clock-skew failures |
-| **TLS Version** | Minimum **TLS 1.2** for VEN ↔ PCE communication |
-| **Certificate Trust** | The PCE root CA certificate must be imported; the VEN must be able to validate the full certificate chain |
-
-### Network Port Requirements
-
-| Deployment Type | Port | Purpose |
-|-----------------|------|---------|
-| **On-Premises** | TCP **8443** | VEN → PCE REST API (HTTPS) |
-| **On-Premises** | TCP **8444** | VEN → PCE persistent long-lived TLS connection |
-| **SaaS** | TCP **443** | Both REST API and long-lived connection (single port) |
-| **SecureConnect (Optional)** | UDP **500** + UDP **4500** | IPsec encryption between VENs (IKE/NAT-T) |
-
-> **TLS Inspection Warning**: If a firewall or proxy performs TLS inspection (MITM) on the path between the VEN and PCE, **disable TLS inspection for that traffic**. Forged certificates lack the full chain and will cause TLS handshake failures.
-
----
-
-## 🚀 Quick Start
-
-1. Obtain the **CA Certificate** (`illumio-ca.crt`) issued by your PCE.
-2. Obtain a valid **Activation Code** and your **PCE FQDN:PORT** (e.g., `pce.example.com:8443`).
-3. Navigate to the directory for your platform and consult the `README.md` manual.
-4. **Certificate provisioning (choose one)**:
-   - **Recommended**: Drop `illumio-ca.crt` into the same folder as the script — it will be picked up automatically (no script edits needed).
-   - Alternative: Open the script (`.ps1`, `.sh`, `.bat`) in a text editor and replace the embedded certificate content (`-----BEGIN CERTIFICATE-----...`).
-5. Replace `<YOUR_ACTIVATION_CODE>` and `<YOUR_PCE_FQDN:PORT>` placeholders with actual values (PowerShell also accepts these as parameters).
-
-> All scripts include built-in **duplicate-import prevention**: Linux compares certificate file contents, Windows compares the SHA1 Thumbprint. Re-running scripts with a new certificate will not create duplicate trust anchors.
+Start at [docs/README.md](docs/README.md) for the full index.

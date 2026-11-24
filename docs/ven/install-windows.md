@@ -1,144 +1,198 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_ven_win_install.txt`
+# Illumio VEN — Windows 安裝
 
-# Illumio VEN — Windows 手動安裝
+> **適用版本**：Illumio PCE 25.x / 26.x，VEN 25.x / 26.x（腳本於 Windows Server 2022、VEN 26.2.20 實機驗證）  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
-在 Windows 主機上使用 PowerShell 手動安裝 Illumio VEN，包含 CA 憑證匯入至本機電腦信任區、腳本安裝及手動啟用指令，適用於無法使用自動化部署腳本或需逐步驗證的部署場景。
+在 Windows Server 與 Windows 用戶端上安裝 VEN 並向 PCE 配對。本文是 Windows 安裝的唯一完整說明，涵蓋三種做法：
 
-自動化版本見 [`../../windows/manual_deploy/Deploy-Illumio.ps1`](../../windows/manual_deploy/Deploy-Illumio.ps1)。
+| 做法 | 適用情境 | 使用的檔案 |
+|---|---|---|
+| A. 部署腳本 | 大量派送、封閉環境、要自訂目錄 | [`Deploy-Illumio.ps1`](../../windows/manual_deploy/Deploy-Illumio.ps1) 或 [`deploy-illumio.bat`](../../windows/manual_deploy/deploy-illumio.bat) |
+| B. 官方配對指令 | 少量主機、直接用 PCE 產生的指令 | [`Import-RootCA.ps1`](../../windows/pairing_prereq/Import-RootCA.ps1)（只做憑證匯入） |
+| C. 全手動 | 逐步驗證、排除問題 | 無 |
+
+搭配 SCCM、Intune、GPO 的做法見 [大規模派送](./mass-deployment.md)。
 
 ## 2. 前置條件
 
-- 以「系統管理員身分」開啟 Windows PowerShell（必須，否則沒有權限寫入系統憑證區）
-- 主機能解析 PCE FQDN 且防火牆允許連線至 TCP 8443
-- 已取得有效的 Activation Code 及 PCE FQDN
+- **權限**：系統管理員（提升權限的工作階段），或 SYSTEM。
+- **作業系統**：見 [VEN 作業系統支援與相依套件](../reference/ven-os-support.md)。安裝前先套用最新的 Service Pack。
+- **網路**：主機能解析 PCE 的 FQDN，並可連到 TCP 8443、8444（地端 PCE）或 TCP 443（SaaS）。
+- **憑證**：PCE 憑證若由私有 CA 簽發，主機必須信任該 CA。網域環境建議用群組原則派發，腳本偵測到已存在就不會重複匯入。路徑上若有 TLS 攔截設備，必須對 VEN 到 PCE 的流量停用攔截。
+- **其他**：Windows Time 服務正常；至少保留 10 GB 磁碟空間。
+- **配對資訊**：PCE 位址（`FQDN:PORT`）與 Pairing Profile 產生的啟用碼。
 
 ## 3. 操作步驟
 
-### 事前準備
+### 做法 A：部署腳本
 
-1. 按下 Windows 鍵，搜尋 "PowerShell"。
-2. 在 "Windows PowerShell" 上按右鍵，選擇「以系統管理員身分執行」。
+兩支腳本的流程相同：匯入 CA 憑證 → 檢查 PCE 連線 → 靜默安裝 → 啟用。全程不需互動，可重複執行。
 
-### [1] CA 憑證一鍵匯入（PowerShell）
+| | `Deploy-Illumio.ps1` | `deploy-illumio.bat` |
+|---|---|---|
+| 設定方式 | 參數或環境變數 | 修改檔案開頭的設定區，或環境變數 |
+| 需要 PowerShell | 是（5.1 即可，支援受限語言模式） | 否，純 cmd |
+| 沒有 `curl.exe` 時下載安裝檔 | 可以（完整語言模式下） | 不行，需自備安裝檔 |
+| VEN 23.5 以前（只有 `illumio-ven-ctl.ps1`） | 支援 | 不支援 |
 
-```powershell
-# 1. 定義憑證內容
-$certContent = @"
------BEGIN CERTIFICATE-----
-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
-ZpUPoUdMJg==
------END CERTIFICATE-----
-"@
-
-# 2. 儲存為暫存檔案 (使用 ASCII 編碼避免格式問題)
-$tempCertPath = "$env:TEMP\illumio-ca.crt"
-Set-Content -Path $tempCertPath -Value $certContent -Encoding Ascii
-
-# 3. 匯入憑證到「本機電腦 (LocalMachine)」的「根 (Root)」存放區
-Import-Certificate -FilePath $tempCertPath -CertStoreLocation Cert:\LocalMachine\Root
-
-# 4. 刪除暫存檔 (可選)
-Remove-Item -Path $tempCertPath
-
-# 顯示完成訊息
-Write-Host "憑證匯入作業已執行。" -ForegroundColor Green
-```
-
-### [2] 驗證指令
+#### PowerShell
 
 ```powershell
-# 方法 A: 檢查憑證庫是否確實包含該憑證
-# 說明: 在本機根憑證區搜尋主旨包含 "illumio" 的憑證
-Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -like "*illumio*" }
-
-# 預期結果: 應顯示 Thumbprint (指紋) 與 Subject (主旨: CN=illumioCA...)
-
-
-# 方法 B: 使用 Curl 測試連線
-# 說明: Windows 10 (1803+) 和 Windows 11 內建 curl.exe
-# 請將 <Target_URL> 替換為實際網址
-curl.exe -v https://<Target_URL>
-
-# 預期結果:
-# 1. 看到 "*  SSL certificate verify ok"
-# 2. 若失敗會顯示 "Schannel: SEC_E_UNTRUSTED_ROOT" (代表憑證不受信任)
-
-# 注意: 若使用 PowerShell 的 Invoke-WebRequest (iwr) 指令:
-# Invoke-WebRequest https://<Target_URL>
-# 成功會回傳 200 OK 的物件；失敗則會直接拋出紅字錯誤訊息。
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File Deploy-Illumio.ps1 `
+    -ManagementServer <PCE_FQDN>:<PORT> -ActivationCode <ACTIVATION_CODE>
 ```
 
-### [3.1] 腳本安裝指令
+| 參數 | 說明 | 預設 |
+|---|---|---|
+| `-ManagementServer` | PCE 位址。也可用環境變數 `ILLUMIO_MANAGEMENT_SERVER` | 必填 |
+| `-ActivationCode` | 啟用碼。也可用環境變數 `ILLUMIO_ACTIVATION_CODE` | 必填 |
+| `-CertFile` | CA 憑證（PEM） | 腳本同目錄的 `illumio-ca.crt`，其次腳本內嵌憑證 |
+| `-SourceDir` | 安裝檔所在目錄 | 腳本所在目錄 |
+| `-ExeFile` | 安裝檔檔名 | 自動尋找 `*illumio-ven*.exe` |
+| `-NoDownload` | 本機沒有安裝檔時不向 PCE 下載 | 會下載 |
+| `-InstallDir` | VEN 安裝目錄 | `C:\Program Files\Illumio` |
+| `-DataDir` | VEN 資料目錄 | `C:\ProgramData\Illumio` |
+| `-SkipTlsCheck` | 略過安裝前的 PCE 連線檢查 | 會檢查 |
+| `-ApiVersion` | 下載安裝檔使用的 PCE API 版本 | `v25` |
+| `-LogFile` | 日誌檔 | `%TEMP%\IllumioDeploy.log` |
+
+#### Batch
+
+修改 `deploy-illumio.bat` 開頭的設定區，或由派送工具設定環境變數後直接執行：
+
+```cmd
+set ILLUMIO_MANAGEMENT_SERVER=<PCE_FQDN>:<PORT>
+set ILLUMIO_ACTIVATION_CODE=<ACTIVATION_CODE>
+cmd.exe /c deploy-illumio.bat
+```
+
+設定區另有 `SOURCE_DIR`、`EXE_FILE`、`INSTALL_DIR`、`DATA_DIR`、`NO_DOWNLOAD`、`SKIP_TLS_CHECK`、`API_VERSION`、`LOG_FILE`，意義與 PowerShell 參數相同。CA 憑證放在腳本同目錄並命名為 `illumio-ca.crt`。
+
+#### 各步驟的行為
+
+- **CA 憑證**：有提供憑證且受信任的根憑證存放區還沒有它，才會匯入；群組原則派發的憑證也算已存在。沒有提供就跳過，改用系統既有的信任憑證。
+- **PCE 連線檢查**：有 `curl.exe` 時做完整的 TLS 握手並驗證信任鏈；沒有時 PowerShell 版只檢查 TCP 埠可達，Batch 版略過。檢查不通過就在安裝前中止。
+- **安裝檔**：先找本機的安裝檔；找不到時以啟用碼向 PCE 的 VEN Library 下載並驗證 SHA256，這與官方 `pair.ps1` 是同一套機制。找到多個安裝檔時會中止。
+- **既有安裝**：腳本從登錄機碼 `HKLM\SOFTWARE\Illumio` 讀取實際的安裝與資料路徑，所以用過自訂目錄的主機，重跑時不必再給目錄參數。
+- **啟用**：資料目錄下已有 `etc\agent_id.cfg` 時視為已啟用，直接跳過。
+- **重新開機**：安裝程式回報需要重新開機時，腳本仍會完成啟用，最後以結束碼 3010 結束。
+
+啟用碼不會寫入日誌。暫存的憑證與下載的安裝檔放在每次執行新建的工作目錄，只有 SYSTEM 與 Administrators 可以存取，結束時刪除。
+
+結束碼見 [大規模派送 §結束碼](./mass-deployment.md#結束碼)。
+
+#### 自訂安裝目錄
 
 ```powershell
-PowerShell -Command "& {Set-ExecutionPolicy -Scope process remotesigned -Force; Start-Sleep -s 3; Set-Variable -Name ErrorActionPreference -Value SilentlyContinue; [System.Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([System.Net.SecurityProtocolType], 3072); Set-Variable -Name ErrorActionPreference -Value Continue; (New-Object System.Net.WebClient).DownloadFile('https://<PCE_FQDN>:<PORT>/api/v27/software/ven/image?pair_script=pair.ps1&profile_id=<PROFILE_ID>', (echo $env:windir\temp\pair.ps1)); & $env:windir\temp\pair.ps1 -management-server <PCE_FQDN>:<PORT> -activation-code <YOUR_ACTIVATION_CODE>;}"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File Deploy-Illumio.ps1 `
+    -ManagementServer <PCE_FQDN>:<PORT> -ActivationCode <ACTIVATION_CODE> `
+    -InstallDir "D:\Illumio\VEN" -DataDir "D:\Illumio\VEN_Data"
 ```
 
-### [3.2] 手動安裝後執行回報指令
+安裝目錄與資料目錄可各自獨立指定，對應安裝程式的 `INSTALLFOLDER` 與 `DATAFOLDER` 屬性。
+
+#### 各 Windows 版本的差異
+
+| 功能 | Server 2019 以上、Windows 10 1803 以上 | Server 2012 R2、2016 |
+|---|---|---|
+| 憑證匯入、安裝、啟用、重跑跳過 | 支援 | 支援 |
+| 安裝前連線檢查 | 驗證 TLS 信任鏈 | 只檢查 TCP 埠（PowerShell 版） |
+| 自動下載安裝檔 | 支援 | 僅 PowerShell 版、完整語言模式 |
+
+差異來自 Server 2016 以前沒有內建 `curl.exe`。
+
+### 做法 B：官方配對指令
+
+官方配對指令會自行下載並安裝 VEN。PCE 使用私有 CA 時，先匯入憑證：
 
 ```powershell
-& "C:\Program Files\Illumio\illumio-ven-ctl.exe" activate -activation-code <activation_code> -management-server <pce_fqdn:pce_portnumber>
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File Import-RootCA.ps1 -CertFile C:\certs\illumio-ca.crt
 ```
+
+未指定 `-CertFile` 時使用腳本同目錄的 `illumio-ca.crt`，其次腳本內嵌憑證。已存在相同憑證時跳過。
+
+接著到 PCE Web Console 的 **Servers & Endpoints > Pairing Profiles**，選定 Pairing Profile 後產生 Pairing Key，複製 Windows OS Pairing Script，在提升權限的命令提示字元執行。
+
+### 做法 C：全手動
+
+```powershell
+# 1. 匯入 CA 憑證 (PCE 使用私有 CA 時)
+certutil -addstore Root C:\certs\illumio-ca.crt
+
+# 2. 確認 PCE 憑證受信任 (私有 CA 通常沒有可連線的撤銷清單，需加 --ssl-no-revoke)
+curl.exe -sS --ssl-no-revoke -o NUL https://<PCE_FQDN>:<PORT>/
+
+# 3. 安裝
+.\illumio-ven-<VERSION>.win.x64.exe /install /quiet /norestart /log "$env:TEMP\IllumioVENInstall.log"
+#    自訂目錄時加上: INSTALLFOLDER="D:\Illumio\VEN" DATAFOLDER="D:\Illumio\VEN_Data"
+
+# 4. 啟用 (Windows 的選項前面是單一連字號)
+& "C:\Program Files\Illumio\illumio-ven-ctl.exe" activate `
+    -activation-code <ACTIVATION_CODE> -management-server <PCE_FQDN>:<PORT>
+```
+
+VEN 23.5 以前沒有 `illumio-ven-ctl.exe`，改用同目錄的 `illumio-ven-ctl.ps1`，參數相同。
+
+安裝程式也可以在安裝時一併啟用，不需要另外執行 `activate`：
+
+```cmd
+illumio-ven-<VERSION>.win.x64.exe /install /quiet /norestart /log C:\Windows\Temp\IllumioVENInstall.log MANAGEMENT_SERVER=<PCE_FQDN>:<PORT> ACTIVATION_CODE=<ACTIVATION_CODE>
+```
+
+### 解除安裝
+
+```powershell
+& "C:\Program Files\Illumio\illumio-ven-ctl.exe" unpair <recommended | saved | open>
+```
+
+| 模式 | 解除後的防火牆狀態 |
+|---|---|
+| `recommended` | 只允許 RDP (3389) 與 WinRM (5985/5986)，直到重新開機 |
+| `saved` | 還原成安裝 VEN 之前的 Windows 防火牆設定 |
+| `open` | 全部開放 |
+
+`unpair` 會在背景解除安裝（約 30 秒）並從 PCE 刪除該 workload。也可以從 PCE Web Console 的 **Servers & Endpoints > Workloads > VENs** 選取主機後按 Unpair，或從「程式和功能」移除（等同 `saved`）。
 
 ## 4. 驗證
 
 ```powershell
-# 確認憑證已匯入
-Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Subject -like "*illumio*" }
-
-# 確認 VEN 連線
-curl.exe -v https://<PCE_FQDN>:8443
+& "C:\Program Files\Illumio\illumio-ven-ctl.exe" status
 ```
+
+- 四個服務（venAgentMgrSvc、venPlatformHandlerSvc、venVtapServerSvc、venAgentMonitorSvc）都是 Running 與 Enabled。
+- `Agent State` 為 Pairing Profile 指定的模式，不是 `unpaired`。
+- PCE Web Console 的 Workloads 清單出現該主機，狀態為 Online。
 
 ## 5. 失敗回滾 / 救援
 
-- — 無 —
+| 現象 | 處理方式 |
+|---|---|
+| 結束碼 3 | 以系統管理員身分執行 |
+| 結束碼 6，憑證匯入失敗 | 確認檔案是 PEM 格式，內容完整 |
+| 結束碼 7，無法驗證 PCE 憑證 | 提供簽發 PCE 憑證的 CA；確認路徑上沒有 TLS 攔截 |
+| 結束碼 7，無法連線 | 檢查 DNS、防火牆、Proxy |
+| 結束碼 8，PCE 沒有符合的安裝檔或啟用碼無效 | 確認啟用碼；或自備安裝檔 |
+| 結束碼 8，安裝失敗 | 查看 `%TEMP%\IllumioVENInstall.log`；確認沒有被防毒軟體攔截 |
+| 結束碼 9，啟用失敗 | 確認啟用碼有效且未超過使用次數 |
+| 腳本無法執行 | 執行原則由群組原則強制時 `-ExecutionPolicy Bypass` 無效，需先簽署腳本，見 [大規模派送](./mass-deployment.md#嚴格環境的注意事項) |
+| 安裝後要整個退回 | `illumio-ven-ctl.exe unpair saved` |
 
-若 VEN 啟用失敗，確認 PCE FQDN 可解析、TCP 8443 可連通、Activation Code 未過期，並以系統管理員身分重新執行啟用指令。
+腳本的日誌在 `%TEMP%\IllumioDeploy.log`；以 SYSTEM 執行時是 `C:\Windows\Temp\IllumioDeploy.log`。
 
 ## 6. 原廠文件參照
 
-- [NotebookLM] Install, Configure, and Upgrade Guide 25.4 §Windows Pairing Script — PowerShell pair.ps1 下載與執行（SetExecutionPolicy、TLS 1.2、WebClient DownloadFile、-management-server、-activation-code）
-- [NotebookLM] Install, Configure, and Upgrade Guide 25.4 §Windows: Install and Upgrade with CLI and VEN CTL > Windows VEN Activation After Installation — 手動安裝後 illumio-ven-ctl.exe activate（VEN 24.2.10+）或 .ps1（23.5 及更早）
-- [NotebookLM] Install, Configure, and Upgrade Guide 25.4 §Set up Certificates on Workloads > Installation Locations — CA 憑證需匯入 LocalMachine Trusted Root 存放區（非 User 層級）
-- [NotebookLM] Illumio Agent部署手冊_20250815.pdf §8.1 憑證錯誤(Error:408) — Windows 憑證匯入精靈操作說明
+- [NotebookLM] Install, Configure, and Upgrade Guide 25.2 / 26.1 §Windows: Install and Upgrade with CLI and VEN CTL — `/install /quiet /norestart /log`、`INSTALLFOLDER`、`DATAFOLDER`、`MANAGEMENT_SERVER`、`ACTIVATION_CODE`；`illumio-ven-ctl.exe activate -activation-code ... -management-server ...`
+- [NotebookLM] Admin Guide 25.2 / 26.1 §Commonly Used VEN Commands — VEN 23.5 以前為 `illumio-ven-ctl.ps1`，24.2.10 起為 `illumio-ven-ctl.exe`
+- [Web] https://support.illumio.com/shared/software/os-support-package-dependencies/ven.html — 作業系統支援
+- [現場] 官方 `pair.ps1`（PCE 26.2）— 以 `agent_0` 加啟用碼向 `/api/vNN/software/ven/image` 下載安裝檔
+- [現場] 2026-11-24 於 Windows Server 2022（PowerShell 5.1）對 lab PCE 實機驗證
 
 ## 7. 與原廠差異（若有）
 
-- **PowerShell CA 匯入方式**：SOP 使用 Import-Certificate -CertStoreLocation Cert:\LocalMachine\Root，原廠建議使用 MMC 或憑證匯入精靈 GUI，功能一致，SOP 的 PowerShell 方式更適合自動化部署。
-- **VEN ctl 指令版本差異**：SOP 使用 illumio-ven-ctl.exe（適用 VEN 24.2.10+），若環境為舊版（23.5-）需改用 .ps1；SOP 應補充版本說明。
-- **TLS 協商**：SOP PowerShell 指令設定 SecurityProtocol=3072（TLS 1.2），與原廠 pair.ps1 做法一致。
+- **憑證撤銷檢查**：`curl.exe` 使用 Schannel，預設會檢查撤銷清單；私有 CA 的清單通常連不到而導致連線被拒，腳本因此加上 `--ssl-no-revoke`。原廠文件未提及。
+- **已啟用的判斷**：以資料目錄下的 `etc\agent_id.cfg` 判斷，原廠文件未明載重複執行 `activate` 的行為。
+- **既有安裝的定位**：讀取 `HKLM\SOFTWARE\Illumio` 的 `InstallPath` 與 `DataPath`。此機碼為現場觀察，原廠文件未記載。
+- **未實機驗證的部分**：Windows Server 2012 R2 與 2016 沒有測試機。沒有 `curl.exe` 的下載路徑只在 Server 2022 上以模擬方式驗證過。
+- **內容改寫**（2026-11-24）：本文取代原 SOP 與 `windows/` 下兩份 README 的重複內容。原 SOP 內嵌的 lab CA 憑證已移除，改為佔位符。

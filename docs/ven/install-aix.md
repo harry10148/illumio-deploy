@@ -1,14 +1,13 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_ven_aix_install.txt`
-
 # Illumio VEN — AIX 手動安裝
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
 在 IBM AIX 主機上手動安裝 Illumio VEN，涵蓋安裝前 IPFilter 狀態確認、移除舊版 IPFilter、安裝 Illumio 提供的更新版 IPFilter 與 CA 憑證部署、安裝 VEN 套件，以及啟用 VEN 與 PCE 配對等完整步驟。
 
-目前 aix/ 僅有 README.md 說明，無自動腳本。
+AIX 沒有自動化腳本，本文是 AIX 安裝的唯一完整說明。作業系統支援範圍見 [VEN 作業系統支援與相依套件](../reference/ven-os-support.md)；解除安裝見 [AIX 解除安裝](./uninstall-aix.md)。
 
 ## 2. 前置條件
 
@@ -113,8 +112,15 @@ perl -pi -e "s/{pce_port_value}/8443/g" runtime_env.yml
 
 # 4. 啟動 VEN 並與 PCE 配對 (請將 <pce_fqdn> 替換為實際網域)
 ./illumio-ven-ctl activate \
---activation-code 1bf7754047275ef530e8f8fadd33bb1020b1a8c07a0b748004e6aa145ad8d3fa3710542f41b3e8f8e \
+--activation-code <ACTIVATION_CODE> \
 --management-server <pce_fqdn>:8443
+```
+
+上面第 2、3 步是把 PCE 位址寫入 `runtime_env.yml`。`activate` 本身已帶 `--management-server`，一般情況可以略過這兩步直接執行第 4 步；只有需要先注入設定的自動化情境才需要。AIX 內建的 `sed` 不支援 `-i`，沒有 perl 時改用：
+
+```bash
+sed "s/{pce_fqdn_value}/<pce_fqdn>/g; s/{pce_port_value}/8443/g" runtime_env.yml > runtime_env.yml.new \
+    && mv runtime_env.yml.new runtime_env.yml
 ```
 
 狀態檢查與排錯：
@@ -126,6 +132,20 @@ perl -pi -e "s/{pce_port_value}/8443/g" runtime_env.yml
 # 若啟用失敗，請查閱日誌檔案
 # 目錄位置：/opt/illumio_ven/log/
 ```
+
+### 替代做法：官方配對指令
+
+IPFilter 與憑證（第 1～3 章）處理完後，也可以改用 PCE 產生的 AIX 配對指令，由它下載並安裝 VEN，取代第 4～5 章。到 PCE Web Console 的 **Servers & Endpoints > Pairing Profiles** 產生 Pairing Key，複製 AIX OS Pairing Script 執行。指令形式如下：
+
+```bash
+rm -fr /opt/illumio_ven/tmp && umask 026 && mkdir -p /opt/illumio_ven/tmp && \
+curl --tlsv1 "https://<pce_fqdn>:<port>/api/v<NN>/software/ven/image?pair_script=pair.aix.sh&profile_id=<PROFILE_ID>" \
+    -o /opt/illumio_ven/tmp/pair.sh && \
+chmod +x /opt/illumio_ven/tmp/pair.sh && \
+/opt/illumio_ven/tmp/pair.sh --management-server <pce_fqdn>:<port> --activation-code <ACTIVATION_CODE>
+```
+
+`curl --tlsv1` 的意思是「至少 TLS 1.0」，實際會協商到雙方都支援的最高版本。要強制下限可改成 `--tlsv1.2`。
 
 ## 4. 驗證
 
@@ -144,7 +164,12 @@ openssl s_client -connect <pce_fqdn>:8443 -CAfile /var/ssl/certs/ca-bundle.crt -
 
 ## 5. 失敗回滾 / 救援
 
-- — 無 —
+| 現象 | 處理方式 |
+|---|---|
+| `openssl` 驗證失敗 | `ca-bundle.crt` 缺少完整憑證鏈（含中繼憑證） |
+| `installp` 報錯 | 確認映像檔在目前目錄，且已執行 `inutoc .` |
+| `curl` 下載配對腳本失敗 | 憑證未匯入，或 DNS、防火牆不通 |
+| 啟用失敗 | 確認已安裝 Illumio 版 IPFilter；查看 `/opt/illumio_ven/log/` |
 
 若啟用失敗，確認 `/opt/illumio_ven/log/` 日誌，並確保 `ca-bundle.crt` 包含完整的信任鏈（包含中繼憑證）。若系統 Perl 不可用，可改用 `sed` 替換 `runtime_env.yml` 中的佔位符。
 
@@ -159,3 +184,5 @@ openssl s_client -connect <pce_fqdn>:8443 -CAfile /var/ssl/certs/ca-bundle.crt -
 - **IPFilter 處理流程**：SOP 的移除（installp -u ipfl.rte + emgr -r）與安裝（inutoc + installp -acYd . ipfl）流程與原廠（Install_Upgrade §AIX）一致。
 - **CA 憑證路徑**：SOP 使用 /var/ssl/certs/ca-bundle.crt（追加方式 >>），原廠文件中 AIX CA 路徑同此，chmod 644 要求亦一致。
 - **VEN activate 方式**：SOP 使用 perl -pi -e 替換 runtime_env.yml 佔位符後再執行 activate，原廠未記錄此兩段式方式，但功能等同直接傳入參數，SOP 補強合理（針對 runtime_env.yml 預設佔位符設計）。
+- **啟用碼去識別**（2026-11-24）：原 SOP 第 5 章的 `--activation-code` 帶有實際的啟用碼，已改為 `<ACTIVATION_CODE>` 佔位符。
+- **內容合併**（2026-11-24）：併入原 `aix/` 下兩份 README 的官方配對指令與疑難排解，並補充 `runtime_env.yml` 兩步可略過的說明。

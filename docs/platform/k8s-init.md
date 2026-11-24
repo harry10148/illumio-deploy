@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumilo_k8s_init.txt`
-
 # Illumio Kubernetes 初始化作業
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -102,7 +101,7 @@ vi illumio-values.yaml
 illumio-values.yaml 內容：
 
 ```yaml
-pce_url: pce.lab.local:8443
+pce_url: pce.example.com:8443
 cluster_id: <ILO_CLUSTER_UUID>
 cluster_token: <ILO_CLUSTER_TOKEN>
 cluster_code: <ILO_CLUSTER_CODE>
@@ -142,12 +141,12 @@ metadata:
 data:
   lab.server: | # All custom server files must have a ".server" file extension.
     # Change example.com to the domain you wish to forward.
-    lab.local {
+    example.com {
       # Change 1.1.1.1 to your customer DNS resolver.
-      forward . 172.16.15.100
+      forward . 10.0.0.100
     }
   upstreamNameservers: |
-    ["172.16.15.100"]
+    ["10.0.0.100"]
 ```
 
 ```bash
@@ -188,3 +187,4 @@ kubectl get pods -n illumio-system
 - **CoreDNS 自訂域名**：原廠文件未包含 CoreDNS 自訂設定步驟，SOP 為 Lab 環境補強（使 Pod 能解析 PCE FQDN）。
 - **MicroK8s**：SOP 用於 MicroK8s 環境；原廠未正式支援，建議在 SOP 中加入免責說明。
 - **machineID 確認**：原廠文件未提及此步驟，SOP 補強合理（避免相同 machineID 導致 Illumio 識別問題）。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

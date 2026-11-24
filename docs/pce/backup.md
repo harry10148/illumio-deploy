@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_backup_v4.txt`
-
 # Illumio PCE 備份程序
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -25,7 +24,7 @@
 ```bash
 dnf install cifs-utils -y
 
-mount -t cifs -o username=harry //dc.lab.local/share /mnt/smb
+mount -t cifs -o username=harry //dc.example.com/share /mnt/smb
 umount /mnt/smb/
 vi /root/smb.cred
 ```
@@ -35,7 +34,7 @@ credential 檔案範本（`/root/smb.cred`）：
 ```
 username=harry
 password=<SMB_PASSWORD>
-domain=lab.local
+domain=example.com
 ```
 
 設定 credential 檔案安全權限，並加入 fstab 自動掛載：
@@ -49,7 +48,7 @@ vi /etc/fstab
 fstab 範本：
 
 ```
-//dc.lab.local/share /mnt/smb  cifs  credentials=/root/smb.cred  0 0
+//dc.example.com/share /mnt/smb  cifs  credentials=/root/smb.cred  0 0
 //192.168.1.200/win_share  /mnt/smb_data  cifs  credentials=/root/.smbcreds,_netdev,vers=3.0  0 0
 ```
 
@@ -111,7 +110,7 @@ SMB_MOUNT_POINT="/mnt/smb/illumio-backup"
 
 # 3. SCP (DR Site) Settings
 DR_USER="root"
-DR_HOST="172.16.15.131"
+DR_HOST="10.0.0.131"
 DR_DEST_DIR="/opt/illumio-backup"
 
 # --- [DEFAULT SWITCHES] ---
@@ -311,3 +310,4 @@ sudo -u ilo-pce illumio-pce-ctl listen-only-mode disable
 - **SMB/SCP 傳輸模式**：原廠文件建議備份存放於叢集外系統，SOP 實作 SMB 與 SCP 兩種傳輸模式符合此建議。
 - **保留政策（7日 DB / 14日 Traffic）**：原廠未規定具體保留天數，SOP 自行訂定，合理。
 - **runtime_env.yml 備份**：原廠（Core Admin §PCE Database Backup）明確指出 runtime_env.yml 不含於資料庫備份中，需手動另行備份；SOP 已包含此步驟，與原廠一致。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

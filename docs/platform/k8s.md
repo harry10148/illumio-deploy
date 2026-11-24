@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_k8s.txt`
-
 # Illumio Core for Kubernetes 部署
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -76,7 +75,7 @@ spec:
 準備 `illumio-values.yaml`：
 
 ```yaml
-pce_url: pce.lab.local:8443
+pce_url: pce.example.com:8443
 cluster_id: <ILO_CLUSTER_UUID>
 cluster_token: <ILO_CLUSTER_TOKEN>
 cluster_code: <ILO_CLUSTER_CODE>
@@ -164,3 +163,4 @@ kubectl get pods -n illumio-system
 - **Helm values 參數**：SOP 的 illumio-values.yaml（pce_url、cluster_id、cluster_token、cluster_code、containerRuntime: crio、extraVolumes、ignore_cert）與原廠（Install_Upgrade §Helm Chart Parameters）完全對應。
 - **Calico Operator 方式**：SOP 提供 tigera-operator Installation CR 的 chainInsertMode 設定，原廠未明確記錄此進階用法，SOP 補強合理。
 - **離線 Image 搬移**：podman save/load/tag/push 流程原廠未記錄（屬環境適配），SOP 補強合理。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

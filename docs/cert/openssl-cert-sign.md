@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/openssl_cert-sign.txt`
-
 # OpenSSL 自簽憑證程序
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -36,17 +35,17 @@ stateOrProvinceName			= Taiwan
 localityName				= Taipei
 organizationName			= illumio
 organizationalUnitName			= Fairline
-commonName				= pce.lab.local
+commonName				= pce.example.com
 [ req_ext ]
 extendedKeyUsage			= serverAuth, clientAuth
 subjectAltName				= @alt_names
 
 [alt_names]
-DNS.1   = pce.lab.local
-DNS.2   = core0.lab.local
-DNS.3   = core1.lab.local
-DNS.4   = data0.lab.local
-DNS.5   = data1.lab.local
+DNS.1   = pce.example.com
+DNS.2   = core0.example.com
+DNS.3   = core1.example.com
+DNS.4   = data0.example.com
+DNS.5   = data1.example.com
 
 
 #=======================================================================
@@ -93,3 +92,4 @@ openssl x509 -in server.crt -noout -text | grep -A1 "Subject Alternative Name"
 ## 7. 與原廠差異（若有）
 
 - **原廠文件未涵蓋**：Illumio 官方文件不提供 PCE 自簽 TLS 憑證的 OpenSSL 生成步驟；此 SOP 為環境補強（Lab/POC 用途），內容基於 OpenSSL 標準實作。SAN 設定（包含所有節點 FQDN 與 PCE FQDN）是 PCE 憑證的必要條件，SOP 正確包含此設定。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

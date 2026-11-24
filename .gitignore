@@ -38,7 +38,12 @@ docs/guide/*.docx
 docs/guide/_rework/*.docx
 docs/guide/_rework/*.pdf
 
-# Sensitive information (Just in case, though we scrubbed it)
-# *.crt
-# *.key
-# *.pem
+# 憑證與金鑰：部署時放在腳本旁邊的 CA 憑證與任何私鑰都不進版本控制
+illumio-ca.crt
+*.key
+*.pem
+*.pfx
+*.p12
+
+# 工具產生的暫存目錄
+.playwright-mcp/

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docs, links, encoding, secrets, shell syntax
+        run: ./scripts/check-docs.sh
+
+      - name: ShellCheck
+        run: shellcheck -S warning linux/manual_deploy/deploy-illumio.sh linux/pairing_prereq/prepare-and-pair.sh scripts/check-docs.sh
+
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem -Recurse -Filter *.ps1 windows) {
+            $errs = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
+            if ($errs.Count -gt 0) { $failed = $true; $errs | ForEach-Object { Write-Host "$($f.Name):$($_.Extent.StartLineNumber): $($_.Message)" } }
+          }
+          if ($failed) { exit 1 }

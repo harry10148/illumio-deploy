@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/Illumio_ven_proxy_pairprofile.txt`
-
 # Illumio VEN — 透過 Proxy 配對與 Pairing Profile
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -10,7 +9,7 @@
 
 ## 2. 前置條件
 
-- Proxy 伺服器 IP 與 Port 已知（本文件範例：`172.16.15.106:3128`）
+- Proxy 伺服器 IP 與 Port 已知（本文件範例：`10.0.0.106:3128`）
 - 主機可透過 Proxy 連線至 PCE FQDN TCP 8443
 - 已取得有效的 Activation Code 及 Pairing Profile ID
 - Windows：PowerShell 以系統管理員身分執行
@@ -25,7 +24,7 @@
 2. 後段：新增 `-proxy-server` 參數，確保 VEN 安裝後能透過 Proxy 連線至 PCE。
 
 ```powershell
-PowerShell -Command "& {Set-ExecutionPolicy -Scope process remotesigned -Force; >>> [NEW] [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy('http://172.16.15.106:3128'); <<< Start-Sleep -s 3; Set-Variable -Name ErrorActionPreference -Value SilentlyContinue; [System.Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([System.Net.SecurityProtocolType], 3072); Set-Variable -Name ErrorActionPreference -Value Continue; (New-Object System.Net.WebClient).DownloadFile('https://pce.lab.local:8443/api/v27/software/ven/image?pair_script=pair.ps1&profile_id=7', (echo $env:windir\temp\pair.ps1)); & $env:windir\temp\pair.ps1 -management-server pce.lab.local:8443 -activation-code <ACTIVATION_CODE> >>> [NEW] -proxy-server 172.16.15.106:3128 <<<;}"
+PowerShell -Command "& {Set-ExecutionPolicy -Scope process remotesigned -Force; >>> [NEW] [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy('http://10.0.0.106:3128'); <<< Start-Sleep -s 3; Set-Variable -Name ErrorActionPreference -Value SilentlyContinue; [System.Net.ServicePointManager]::SecurityProtocol=[Enum]::ToObject([System.Net.SecurityProtocolType], 3072); Set-Variable -Name ErrorActionPreference -Value Continue; (New-Object System.Net.WebClient).DownloadFile('https://pce.example.com:8443/api/v27/software/ven/image?pair_script=pair.ps1&profile_id=7', (echo $env:windir\temp\pair.ps1)); & $env:windir\temp\pair.ps1 -management-server pce.example.com:8443 -activation-code <ACTIVATION_CODE> >>> [NEW] -proxy-server 10.0.0.106:3128 <<<;}"
 ```
 
 ### 二、Linux 平台（Bash/Shell）
@@ -35,7 +34,7 @@ PowerShell -Command "& {Set-ExecutionPolicy -Scope process remotesigned -Force; 
 2. 後段：新增 `--proxy-server` 參數，確保 VEN 安裝後能透過 Proxy 連線至 PCE。
 
 ```bash
->>> [NEW] export https_proxy='http://172.16.15.106:3128'; <<< rm -fr /opt/illumio_ven_data/tmp && umask 026 && mkdir -p /opt/illumio_ven_data/tmp && curl --tlsv1 "https://pce.lab.local:8443/api/v27/software/ven/image?pair_script=pair.sh&profile_id=7" -o /opt/illumio_ven_data/tmp/pair.sh && chmod +x /opt/illumio_ven_data/tmp/pair.sh && /opt/illumio_ven_data/tmp/pair.sh --management-server pce.lab.local:8443 --activation-code <ACTIVATION_CODE> >>> [NEW] --proxy-server 172.16.15.106:3128 <<<
+>>> [NEW] export https_proxy='http://10.0.0.106:3128'; <<< rm -fr /opt/illumio_ven_data/tmp && umask 026 && mkdir -p /opt/illumio_ven_data/tmp && curl --tlsv1 "https://pce.example.com:8443/api/v27/software/ven/image?pair_script=pair.sh&profile_id=7" -o /opt/illumio_ven_data/tmp/pair.sh && chmod +x /opt/illumio_ven_data/tmp/pair.sh && /opt/illumio_ven_data/tmp/pair.sh --management-server pce.example.com:8443 --activation-code <ACTIVATION_CODE> >>> [NEW] --proxy-server 10.0.0.106:3128 <<<
 ```
 
 ### 三、技術補充
@@ -73,3 +72,4 @@ PowerShell -Command "& {Set-ExecutionPolicy -Scope process remotesigned -Force; 
 
 - 原 SOP §3「`--proxy-server` 自動建立防火牆 Allow 規則」說明有誤已修正（2026-05-29 編輯回合）。
 - **Proxy 設定位置**：Windows 使用 [System.Net.WebRequest]::DefaultWebProxy（前段）+ -proxy-server（後段）的雙段設定，與原廠指引一致。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

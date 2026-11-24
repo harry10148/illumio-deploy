@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_rulehitcount.txt`
-
 # Illumio Rule Hit Count（規則命中計數查詢）
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -21,7 +20,7 @@
 ```bash
 ILO_API_KEY_ID="<ILO_API_KEY_ID>"
 ILO_API_KEY_SECRET="<ILO_API_KEY_SECRET>"
-ILO_SERVER="pce.lab.local:8443"
+ILO_SERVER="pce.example.com:8443"
 ILO_ORG_ID="1"
 ```
 
@@ -63,3 +62,4 @@ curl -i -X PUT https://${ILO_SERVER}/api/v2/orgs/${ILO_ORG_ID}/report_templates/
 
 - 主要流程與原廠 REST APIs 25.4 一致；但 SOP 缺少「POST sec_policy 後於 VEN 端確認 Rule Hit Count 生效」的驗證步驟（原廠流程要求此步驟）。
 - SOP 的 PUT firewall_settings（rule_hit_count_enabled_scopes）與 PUT report_templates/rule_hit_count_report 兩個 API 呼叫均與原廠（REST APIs 25.4 §Rule Hit Count）相符。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

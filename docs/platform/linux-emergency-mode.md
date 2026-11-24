@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/linux_emergency_mode_sop.txt`
-
 # Linux Emergency Mode 進入與修復
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-05-29
 
 ## 1. 目的與適用情境
 

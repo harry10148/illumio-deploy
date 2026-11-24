@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_pce_mnc_setup_v4.txt`
-
 # Illumio PCE MNC 安裝（多節點叢集）
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -31,7 +30,7 @@ timedatectl
 
 # 2. 設定 NTP (請依環境修改 IP)
 # 編輯設定檔：vi /etc/chrony.conf
-# 加入行：server 172.16.15.254 iburst
+# 加入行：server 10.0.0.254 iburst
 # 加入行：user ilo-pce
 
 # 3. 設定權限並重啟服務
@@ -40,7 +39,7 @@ sudo systemctl restart chronyd
 
 # 4. 確認同步狀態 (需看到 * 號表示已鎖定)
 chronyc sources -v
-chronyd -Q -t 3 'server 172.16.15.254 iburst'
+chronyd -Q -t 3 'server 10.0.0.254 iburst'
 ```
 
 #### 1.2 安裝相依套件
@@ -140,7 +139,7 @@ sudo cp /tmp/server.key /var/lib/illumio-pce/cert
     L = Taipei
     O = Illumio
     OU = IT
-    CN = pce.lab.local
+    CN = pce.example.com
 
     [ v3_ext ]
     basicConstraints = CA:TRUE
@@ -149,11 +148,11 @@ sudo cp /tmp/server.key /var/lib/illumio-pce/cert
     subjectAltName = @alt_names
 
     [ alt_names ]
-    DNS.1 = pce.lab.local
-    DNS.2 = core0.lab.local
-    DNS.3 = core1.lab.local
-    DNS.4 = data0.lab.local
-    DNS.5 = data1.lab.local
+    DNS.1 = pce.example.com
+    DNS.2 = core0.example.com
+    DNS.3 = core1.example.com
+    DNS.4 = data0.example.com
+    DNS.5 = data1.example.com
     EOF
 # 建立 ssl.conf 後執行：
 openssl req -x509 -new -nodes -newkey rsa:4096 \
@@ -183,7 +182,7 @@ sudo update-ca-trust enable && sudo update-ca-trust extract
 sudo /opt/illumio-pce/illumio-pce-env setup
 
 # --- 以下為互動式精靈的主要參數說明 ---
-# pce_fqdn: pce.lab.local                  (PCE 對外 FQDN)
+# pce_fqdn: pce.example.com                  (PCE 對外 FQDN)
 # service_discovery_fqdn: <core0_IP>       (第一個 Core 節點的 IP 或 FQDN)
 # cluster_public_ips:
 #   cluster_fqdn:
@@ -197,7 +196,7 @@ sudo /opt/illumio-pce/illumio-pce-env setup
 # web_service_private_key: /var/lib/illumio-pce/cert/server.key
 # web_service_certificate: /var/lib/illumio-pce/cert/server.crt
 # service_discovery_encryption_key: ****** (叢集加密金鑰，可用 openssl rand -base64 16 產生)
-# smtp_relay_address: 172.16.15.103:25     (SMTP 伺服器)
+# smtp_relay_address: 10.0.0.103:25     (SMTP 伺服器)
 ```
 
 #### 4.2 追加進階設定
@@ -217,24 +216,24 @@ echo "expose_user_invitation_link: true" | sudo tee -a /etc/illumio-pce/runtime_
 #### 5.1 複製檔案並修改角色（從第 1 台 Core 執行）
 
 ```bash
-cat /etc/illumio-pce/runtime_env.yml | ssh root@172.16.15.132 "cat > /etc/illumio-pce/runtime_env.yml"
+cat /etc/illumio-pce/runtime_env.yml | ssh root@10.0.0.132 "cat > /etc/illumio-pce/runtime_env.yml"
 
 # 傳送並修改 node_type 為 data0 與 data1
-cat /etc/illumio-pce/runtime_env.yml | ssh root@172.16.15.133 "sed 's/^node_type: core$/node_type: data0/' > /etc/illumio-pce/runtime_env.yml"
-cat /etc/illumio-pce/runtime_env.yml | ssh root@172.16.15.134 "sed 's/^node_type: core$/node_type: data1/' > /etc/illumio-pce/runtime_env.yml"
+cat /etc/illumio-pce/runtime_env.yml | ssh root@10.0.0.133 "sed 's/^node_type: core$/node_type: data0/' > /etc/illumio-pce/runtime_env.yml"
+cat /etc/illumio-pce/runtime_env.yml | ssh root@10.0.0.134 "sed 's/^node_type: core$/node_type: data1/' > /etc/illumio-pce/runtime_env.yml"
 ```
 
 #### 5.2 綁定各節點 IP（在各節點分別執行）
 
 ```bash
 # Core 1
-echo "internal_service_ip: 172.16.15.131" >> /etc/illumio-pce/runtime_env.yml
+echo "internal_service_ip: 10.0.0.131" >> /etc/illumio-pce/runtime_env.yml
 # Core 2
-echo "internal_service_ip: 172.16.15.132" >> /etc/illumio-pce/runtime_env.yml
+echo "internal_service_ip: 10.0.0.132" >> /etc/illumio-pce/runtime_env.yml
 # Data 1
-echo "internal_service_ip: 172.16.15.133" >> /etc/illumio-pce/runtime_env.yml
+echo "internal_service_ip: 10.0.0.133" >> /etc/illumio-pce/runtime_env.yml
 # Data 2
-echo "internal_service_ip: 172.16.15.134" >> /etc/illumio-pce/runtime_env.yml
+echo "internal_service_ip: 10.0.0.134" >> /etc/illumio-pce/runtime_env.yml
 ```
 
 #### 5.3 修正檔案權限與環境驗證（所有節點）
@@ -344,3 +343,4 @@ cat /var/log/illumio-pce/pce_error.log
 - **runtime_env.yml 分發方式**：SOP 以 ssh + cat pipe 分發，原廠未規定方式，SOP 補強合理。
 - 原廠必要步驟 `illumio-pce-db-management migrate` 已補入 §3 步驟 6.2.5（2026-05-29 編輯回合）。
 - **命令別名**：同 snc-setup，原廠建議 /usr/bin softlink，SOP 使用 /etc/profile.d/，差異為環境選擇。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

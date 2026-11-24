@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_pce_snc_setup_v3.txt`
-
 # Illumio PCE SNC 安裝（單一節點）
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -71,7 +70,7 @@ ST = Taiwan
 L = Taipei
 O = Illumio
 OU = IT
-CN = pce.lab.local
+CN = pce.example.com
 
 [ v3_ext ]
 basicConstraints = CA:TRUE
@@ -80,7 +79,7 @@ extendedKeyUsage = serverAuth, clientAuth
 subjectAltName = @alt_names
 
 [ alt_names ]
-DNS.1 = pce.lab.local
+DNS.1 = pce.example.com
 
 EOF
 # 建立 ssl.conf 後執行：
@@ -99,7 +98,7 @@ sudo cp server.key /var/lib/illumio-pce/cert/
 /opt/illumio-pce/illumio-pce-env setup
 
 # 方法二：單行指令式設定 (需以 root 執行，並依環境修改參數)
-/opt/illumio-pce/illumio-pce-env setup -b node_type=core pce_fqdn=tpce.lab.local service_discovery_fqdn=tpce.lab.local email_address=<EMAIL_ADDRESS> cluster_public_ips:cluster_fqdn=172.16.15.131 cluster_type=snc0
+/opt/illumio-pce/illumio-pce-env setup -b node_type=core pce_fqdn=pce-test.example.com service_discovery_fqdn=pce-test.example.com email_address=<EMAIL_ADDRESS> cluster_public_ips:cluster_fqdn=10.0.0.131 cluster_type=snc0
 
 # 設定 runtime_env.yml 的權限
 chown root:ilo-pce /etc/illumio-pce/runtime_env.yml
@@ -107,7 +106,7 @@ chmod 640 /etc/illumio-pce/runtime_env.yml
 ls -l /etc/illumio-pce/runtime_env.yml
 
 # 指定服務IP
-echo "internal_service_ip: 172.16.15.131" >> /etc/illumio-pce/runtime_env.yml
+echo "internal_service_ip: 10.0.0.131" >> /etc/illumio-pce/runtime_env.yml
 
 # 啟用「使用者邀請連結」功能
 echo "expose_user_invitation_link: true" >> /etc/illumio-pce/runtime_env.yml
@@ -155,7 +154,7 @@ illumio-pce-ctl start --runlevel 5 && illumio-pce-ctl cluster-status -w
 ### 步驟 8：建立第一個使用者與組織（僅主節點）
 
 ```bash
-illumio-pce-db-management create-domain --user-name admin@lab.local --full-name 'admin' --org-name 'lab'
+illumio-pce-db-management create-domain --user-name admin@example.com --full-name 'admin' --org-name 'example'
 ```
 
 ### 步驟 9：上傳與設定 VEN 軟體版本（僅主節點）
@@ -287,3 +286,4 @@ cat /var/log/illumio-pce/pce_error.log
 - **憑證權限 chmod 400 / chown ilo-pce**：原廠文件未明確指定此權限設定，SOP 為安全補強，合理。
 - **runtime_env.yml 安全參數**（expose_user_invitation_link、insecure_tls_weak_ciphers_enabled、HSTS）：原廠文件無對應說明，SOP 自行補強，需確認當前版本支援性。
 - 原廠必要步驟 `illumio-pce-db-management migrate` 已補入 §3 步驟 6.5（2026-05-29 編輯回合）。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。

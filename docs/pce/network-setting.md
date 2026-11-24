@@ -1,8 +1,7 @@
-> **適用版本**：Illumio PCE 25.4 / VEN 25.4
-> **更新日期**：2026-05-29
-> **原始檔**：`tmp/illumio_snc_network_setting.txt`
-
 # Illumio PCE SNC 網路設定
+
+> **適用版本**：Illumio PCE 25.4 / VEN 25.4  
+> **最後更新**：2026-11-24
 
 ## 1. 目的與適用情境
 
@@ -46,9 +45,9 @@ nmcli connection delete "ens192"
 # 建立新設定 (請修改 IP 數值，複製整段包含反斜線)
 nmcli connection add con-name "ens192" ifname "ens192" type ethernet \
 ipv4.method manual \
-ipv4.addresses "172.16.15.131/24" \
-ipv4.gateway "172.16.15.254" \
-ipv4.dns "172.16.15.100" \
+ipv4.addresses "10.0.0.131/24" \
+ipv4.gateway "10.0.0.254" \
+ipv4.dns "10.0.0.100" \
 connection.autoconnect yes
 ```
 
@@ -74,13 +73,13 @@ connection.autoconnect yes
 # 修改設定 (請修改 IP 數值，複製整段包含反斜線)
 nmcli connection modify "ens192" \
 ipv4.method manual \
-ipv4.addresses "172.16.15.131/24" \
-ipv4.gateway "172.16.15.254" \
-ipv4.dns "172.16.15.100" \
+ipv4.addresses "10.0.0.131/24" \
+ipv4.gateway "10.0.0.254" \
+ipv4.dns "10.0.0.100" \
 connection.autoconnect yes
 
 # (備用：單行版本，若上方貼上失敗可改用此行)
-nmcli connection modify "ens192" ipv4.method manual ipv4.addresses "172.16.15.131/24" ipv4.gateway "172.16.15.254" ipv4.dns "172.16.15.100" connection.autoconnect yes
+nmcli connection modify "ens192" ipv4.method manual ipv4.addresses "10.0.0.131/24" ipv4.gateway "10.0.0.254" ipv4.dns "10.0.0.100" connection.autoconnect yes
 ```
 
 ### 第三階段：啟用與驗證（必須執行）
@@ -124,3 +123,4 @@ ping -c 4 8.8.8.8
 ## 7. 與原廠差異（若有）
 
 - **原廠文件未涵蓋**：Illumio 官方文件不包含 OS 層網路設定（nmcli 靜態 IP、ifcfg 衝突清理）；此 SOP 為環境準備補強，內容基於 RHEL/NetworkManager 標準操作，非 Illumio 特有步驟。
+- **範例環境去識別**（2026-11-24）：原 SOP 中的 lab 主機名稱與 IP 已改為 `example.com` 與 `10.0.0.x` 範例值；指令與參數本身未變更。
