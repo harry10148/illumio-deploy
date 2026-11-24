@@ -194,5 +194,11 @@ illumio-ven-<VERSION>.win.x64.exe /install /quiet /norestart /log C:\Windows\Tem
 - **憑證撤銷檢查**：`curl.exe` 使用 Schannel，預設會檢查撤銷清單；私有 CA 的清單通常連不到而導致連線被拒，腳本因此加上 `--ssl-no-revoke`。原廠文件未提及。
 - **已啟用的判斷**：以資料目錄下的 `etc\agent_id.cfg` 判斷，原廠文件未明載重複執行 `activate` 的行為。
 - **既有安裝的定位**：讀取 `HKLM\SOFTWARE\Illumio` 的 `InstallPath` 與 `DataPath`。此機碼為現場觀察，原廠文件未記載。
-- **未實機驗證的部分**：Windows Server 2012 R2 與 2016 沒有測試機。沒有 `curl.exe` 的下載路徑只在 Server 2022 上以模擬方式驗證過。
+- **未實機驗證的部分**：
+  - Windows Server 2012 R2 與 2016 沒有測試機。沒有 `curl.exe` 的下載路徑只在 Server 2022 上以模擬方式（把 `curl.exe` 的路徑改成不存在）驗證過。
+  - 結束碼 3010：測試中安裝程式從未回報需要重新開機，這條路徑沒有實際走過。
+  - 憑證「成功匯入」：測試機的 CA 已由群組原則派發，實測到的只有「已存在而跳過」與「無效憑證而失敗」兩種結果。
+  - 受限語言模式：以設定工作階段的語言模式模擬，不是由 WDAC 或 AppLocker 強制的環境。
+  - VEN 23.5 以前：沒有舊版 VEN 的測試機。只驗證過以相同方式呼叫 VEN 26.2 內附的 `illumio-ven-ctl.ps1`（`status` 與 `activate`）參數與結束碼正確。
+- **重複啟用**：在 Windows 上對已配對的 VEN 再執行 `activate`，VEN 26.2 會回報「already installed, and is currently paired」並以結束碼 0 結束（現場實測）。腳本仍會先判斷並跳過。
 - **內容改寫**（2026-11-24）：本文取代原 SOP 與 `windows/` 下兩份 README 的重複內容。原 SOP 內嵌的 lab CA 憑證已移除，改為佔位符。

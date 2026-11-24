@@ -64,7 +64,7 @@ sudo bash deploy-illumio.sh \
 - **PCE 連線檢查**：安裝前先對 PCE 做一次 TLS 握手。信任鏈不通或連不到就中止，不會留下「裝了卻啟用不了」的主機。
 - **安裝包**：先找本機的安裝包；找不到時以啟用碼向 PCE 的 VEN Library 下載符合本機作業系統的版本，並驗證 SHA256。這與官方 `pair.sh` 是同一套機制。找到多個安裝包時會中止，請用 `--package` 指定。
 - **相依套件**：以 `rpm -i --test` 或 `dpkg --dry-run -i` 試裝，缺件就以結束碼 5 中止，並列出缺少的套件與建議的安裝指令。**腳本不會自行安裝任何作業系統套件。** 原廠支援表另外列出、但安裝包沒有宣告的套件只會提醒。
-- **啟用**：`illumio-ven-ctl status` 的 Agent state 不是 `unpaired` 時視為已啟用，直接跳過。
+- **啟用**：`illumio-ven-ctl status` 的 Agent state 不是 `unpaired` 時視為已啟用，直接跳過。VEN 服務停止時 `status` 仍會回報原本的狀態，判斷不受影響。
 
 啟用碼不會寫入日誌。用環境變數傳入可避免它出現在派送工具的命令列紀錄：
 
@@ -93,18 +93,22 @@ sudo bash deploy-illumio.sh --management-server <PCE_FQDN>:<PORT> --activation-c
 | DEB | 固定為 `/opt/illumio_ven`（`dpkg` 不支援） | 可自訂；之後升級必須沿用，不能搬移 |
 
 - 自訂目錄只在初次安裝時生效。之後重跑腳本不必再給這兩個選項，腳本會從套件管理員的紀錄找到實際位置。
-- **SELinux**：自訂目錄預設的標籤會讓 systemd 無法執行 VEN 常駐程式，啟用會失敗。腳本偵測到 SELinux 啟用時，會讓自訂目錄比照 `/opt` 的標籤規則。系統有 `semanage` 時建立永久規則；沒有時只做暫時標記並顯示警告，請依警告補上永久規則。
+- **SELinux**：自訂目錄預設的標籤會讓 systemd 無法執行 VEN 常駐程式，啟用會失敗。腳本偵測到 SELinux 啟用時，會讓 `<install-prefix>/illumio_ven` 與 `<data-prefix>/illumio_ven_data` 這兩個子目錄比照預設位置的標籤規則。上層目錄與其中其他應用程式的檔案不會被更動，所以把資料目錄指向 `/data` 這類共用位置是安全的。系統有 `semanage` 時建立永久規則；沒有時只做暫時標記並顯示警告，請依警告補上永久規則。
 
 ### 做法 B：官方配對指令
 
 官方配對指令會自行下載並安裝 VEN。事前只需要處理憑證與相依套件，這由 `prepare-and-pair.sh` 完成。
 
-> **注意**：官方的 `pair.sh` 會自動安裝相依套件。它在 RHEL 系以 `yum -y localinstall` 安裝（會從套件庫補齊相依），在 Debian 系安裝失敗時會執行 `apt-get install --assume-yes` 補裝後重試。不允許自動安裝套件的環境請改用做法 A 或 C。`prepare-and-pair.sh` 本身只檢查與報告，不會安裝套件。
+> **注意**：官方的 `pair.sh` 會自動安裝相依套件，全程不詢問。不允許自動安裝套件的環境請改用做法 A 或 C。`prepare-and-pair.sh` 本身只檢查與報告，不會安裝套件。
 
+| 作業系統 | 官方 `pair.sh` 執行的安裝指令 | 效果 |
+|---|---|---|
+| RHEL 系 | `yum -y --nogpgcheck localinstall <安裝包>`，失敗才退回 `rpm -ivh` | 缺的相依套件自動從主機設定的套件庫安裝；略過簽章檢查 |
+| Ubuntu 16.04 以上 | `apt-get --assume-yes install <安裝包>` | 自動補齊相依套件 |
+| 較舊的 Ubuntu、Debian | 先 `dpkg -i`；失敗就以 `apt-get install --assume-yes` 安裝 Depends 清單後重試 | 失敗時自動補裝 |
+| SLES | `zypper --no-gpg-checks --non-interactive install <安裝包>` | 自動補齊相依套件；略過簽章檢查 |
 
-```bash
-sudo bash prepare-and-pair.sh --cert-file /path/to/illumio-ca.crt
-```
+主機連不到套件庫時，RHEL 系會退回 `rpm -ivh`，此時缺件會直接失敗。
 
 | 選項 | 說明 |
 |---|---|
@@ -211,4 +215,4 @@ sudo /opt/illumio_ven/illumio-ven-ctl status
 - **SELinux 與自訂目錄**：原廠文件只說明 `--prefix` 與 `VEN_DATA_DIR`，未提到 SELinux 啟用時需要調整標籤。此為現場實測補充。
 - **已啟用的判斷**：以 `illumio-ven-ctl status` 的 Agent state 判斷，原廠文件未明載重複執行 `activate` 的行為。
 - **內容改寫**（2026-11-24）：本文取代原 SOP 與 `linux/` 下兩份 README 的重複內容。原 SOP 內嵌的 lab CA 憑證與 lab 主機名稱已移除，改為佔位符；安裝包檔名改為 `<VERSION>.<PLATFORM>` 形式。
-- **官方 pair.sh 自動安裝相依套件**：依 PCE 26.2 產生的 `pair.sh` 內容確認（`yum -y --nogpgcheck localinstall`、`apt-get install --assume-yes`）。本專案的腳本刻意不這麼做。
+- **官方 pair.sh 自動安裝相依套件**：依 PCE 26.2 產生的 `pair.sh` 原始碼確認，各作業系統的指令見做法 B 的表格。本專案的部署腳本刻意不這麼做，缺件時只列出建議的安裝指令。

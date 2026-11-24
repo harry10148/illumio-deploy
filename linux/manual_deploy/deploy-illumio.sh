@@ -390,17 +390,18 @@ else
     [ -n "$INSTALL_PREFIX" ] && log INFO "程式上層目錄: $INSTALL_PREFIX"
     [ -n "$DATA_PREFIX" ] && log INFO "資料上層目錄: $DATA_PREFIX"
     # SELinux 啟用時，自訂目錄預設的標籤會讓 systemd 無法執行 VEN 常駐程式。
-    # 讓自訂目錄比照 /opt 的標籤規則：有 semanage 就建立永久規則，沒有則安裝後暫時標記。
-    SELINUX_DIRS=()
+    # 只處理 VEN 自己的兩個子目錄，讓它們比照預設位置的標籤規則；上層目錄與其中其他檔案一律不動。
+    # 格式為「自訂路徑=對應的預設路徑」。有 semanage 就建立永久規則，沒有則安裝後暫時標記。
+    SELINUX_MAP=()
     if command -v getenforce > /dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
-        [ -n "$INSTALL_PREFIX" ] && SELINUX_DIRS+=("$INSTALL_PREFIX")
-        [ -n "$DATA_PREFIX" ] && [ "$DATA_PREFIX" != "$INSTALL_PREFIX" ] && SELINUX_DIRS+=("$DATA_PREFIX")
+        [ -n "$INSTALL_PREFIX" ] && SELINUX_MAP+=("${INSTALL_PREFIX%/}/illumio_ven=/opt/illumio_ven")
+        [ -n "$DATA_PREFIX" ] && SELINUX_MAP+=("${DATA_PREFIX%/}/illumio_ven_data=/opt/illumio_ven_data")
     fi
     SELINUX_PERSISTENT=1
-    for d in ${SELINUX_DIRS[@]+"${SELINUX_DIRS[@]}"}; do
-        mkdir -p "$d" || die "$EX_INSTALL" "無法建立目錄: $d"
+    for entry in ${SELINUX_MAP[@]+"${SELINUX_MAP[@]}"}; do
+        custom_path="${entry%%=*}"; default_path="${entry#*=}"
         if command -v semanage > /dev/null 2>&1; then
-            semanage fcontext -a -e /opt "$d" >> "$LOG_FILE" 2>&1 || semanage fcontext -m -e /opt "$d" >> "$LOG_FILE" 2>&1 || SELINUX_PERSISTENT=0
+            semanage fcontext -a -e "$default_path" "$custom_path" >> "$LOG_FILE" 2>&1 || semanage fcontext -m -e "$default_path" "$custom_path" >> "$LOG_FILE" 2>&1 || SELINUX_PERSISTENT=0
         else
             SELINUX_PERSISTENT=0
         fi
@@ -415,14 +416,16 @@ else
     install_rc="${PIPESTATUS[0]}"
     [ "$install_rc" -eq 0 ] || die "$EX_INSTALL" "套件安裝失敗 (結束碼 $install_rc)。"
 
-    for d in ${SELINUX_DIRS[@]+"${SELINUX_DIRS[@]}"}; do
+    for entry in ${SELINUX_MAP[@]+"${SELINUX_MAP[@]}"}; do
+        custom_path="${entry%%=*}"
+        [ -e "$custom_path" ] || continue
         if [ "$SELINUX_PERSISTENT" = "1" ]; then
-            restorecon -R "$d" >> "$LOG_FILE" 2>&1
-            log OK "SELinux: $d 已比照 /opt 設定標籤 (永久規則)。"
+            restorecon -R "$custom_path" >> "$LOG_FILE" 2>&1
+            log OK "SELinux: $custom_path 已比照預設位置設定標籤 (永久規則)。"
         else
-            chcon -R --reference=/opt "$d" >> "$LOG_FILE" 2>&1
-            log WARN "SELinux: $d 已暫時比照 /opt 標記，但系統沒有 semanage，全系統重新標記後會失效。"
-            log WARN "  請安裝 policycoreutils-python-utils 後執行: semanage fcontext -a -e /opt $d && restorecon -R $d"
+            chcon -R --reference=/opt "$custom_path" >> "$LOG_FILE" 2>&1
+            log WARN "SELinux: $custom_path 已暫時標記，但系統沒有 semanage，全系統重新標記後會失效。"
+            log WARN "  請安裝 policycoreutils-python-utils 後執行: semanage fcontext -a -e ${entry#*=} $custom_path && restorecon -R $custom_path"
         fi
     done
     log OK "VEN 安裝完成。"

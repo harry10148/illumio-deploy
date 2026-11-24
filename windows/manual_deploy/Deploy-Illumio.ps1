@@ -375,7 +375,13 @@ try {
         Write-Log "SKIP" "VEN 已啟用，跳過啟用。"
     } else {
         Write-Log "INFO" "PCE: $ManagementServer"
-        Invoke-Logged "ven-ctl" $venCtl @("activate", "-activation-code", $ActivationCode, "-management-server", $ManagementServer)
+        $activateArgs = @("activate", "-activation-code", $ActivationCode, "-management-server", $ManagementServer)
+        if ($venCtl -like "*.ps1") {
+            # VEN 23.5 以前只有 illumio-ven-ctl.ps1：另起 powershell.exe 執行，參數才會照命令列解析，結束碼也才可靠
+            Invoke-Logged "ven-ctl" "powershell.exe" (@("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $venCtl) + $activateArgs)
+        } else {
+            Invoke-Logged "ven-ctl" $venCtl $activateArgs
+        }
         if ($LASTEXITCODE -ne 0) {
             Stop-Deploy 9 "啟用失敗 (結束碼 $LASTEXITCODE)。請確認啟用碼有效且未超過使用次數。"
         }
