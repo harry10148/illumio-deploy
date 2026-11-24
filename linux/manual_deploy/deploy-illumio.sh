@@ -310,7 +310,7 @@ else
         case "$http_code" in
             200) ;;
             401|403) die "$EX_INSTALL" "PCE 拒絕下載 (HTTP $http_code)。請確認啟用碼有效且未過期。" ;;
-            406) die "$EX_INSTALL" "PCE 的 VEN Library 沒有符合 [$DL_ARCH][$DL_DIST][$DL_VER] 的安裝包。請自行提供安裝包 (--package)。" ;;
+            406) die "$EX_INSTALL" "PCE 沒有符合 [$DL_ARCH][$DL_DIST][$DL_VER] 的安裝包，或啟用碼無效。請確認啟用碼，或自行提供安裝包 (--package)。" ;;
             *)   die "$EX_INSTALL" "安裝包下載失敗 (HTTP ${http_code:-無回應})。" ;;
         esac
 

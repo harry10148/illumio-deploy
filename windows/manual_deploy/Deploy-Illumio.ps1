@@ -111,7 +111,7 @@ function Test-FileExists {
 # Get-PfxCertificate 遇到無效內容會停在密碼提示，不能用於無人值守。
 function Get-CertThumbprint {
     param([string]$Path)
-    $der = Join-Path $env:TEMP "illumio-ca.der"
+    $der = Join-Path $WorkDir "illumio-ca.der"
     Remove-Item -LiteralPath $der -Force -ErrorAction SilentlyContinue
     & certutil.exe -decode $Path $der | Out-Null
     $src = $der
@@ -124,8 +124,23 @@ function Get-CertThumbprint {
     return $thumb
 }
 
+# 私有工作目錄：只有 SYSTEM 與 Administrators 可存取，避免暫存的憑證或安裝檔
+# 在驗證後、使用前被其他本機帳號置換
+$WorkDir = ""
+function New-WorkDir {
+    $dir = Join-Path $env:TEMP ("illumio-deploy-{0}-{1}-{2}" -f $PID, (Get-Random), (Get-Random))
+    New-Item -ItemType Directory -Path $dir | Out-Null      # 目錄已存在時會失敗，不沿用既有目錄
+    & icacls.exe $dir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "無法設定工作目錄的存取權限: $dir" }
+    return $dir
+}
+function Remove-WorkDir {
+    if ($WorkDir) { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 function Stop-Deploy {
     param([int]$Code, [string]$Message)
+    Remove-WorkDir
     Write-Log "ERROR" $Message
     Write-Log "ERROR" "部署中止 (結束碼 $Code)。日誌: $LogFile"
     exit $Code
@@ -157,6 +172,7 @@ try {
     }
     if ($ApiVersion -notmatch '^v[0-9]+$') { Stop-Deploy 2 "-ApiVersion 格式應為 vNN (例如 v25)，目前為: $ApiVersion" }
     $pceHost, $pcePort = $ManagementServer -split ":"
+    $WorkDir = New-WorkDir
     $curl = Join-Path $env:SystemRoot "System32\curl.exe"
 
     # === Step 1: CA 憑證 ===
@@ -171,7 +187,7 @@ try {
     } elseif (Test-Path -LiteralPath $localCertPath) {
         $certPath = $localCertPath
     } elseif ($EmbeddedCertContent -notlike "*PLACEHOLDER_CERTIFICATE_CONTENT*") {
-        $tempCertPath = Join-Path $env:TEMP "illumio-ca-embedded.crt"
+        $tempCertPath = Join-Path $WorkDir "illumio-ca-embedded.crt"
         Set-Content -Path $tempCertPath -Value $EmbeddedCertContent -Encoding Ascii
         $certPath = $tempCertPath
     }
@@ -191,7 +207,6 @@ try {
             if ($LASTEXITCODE -ne 0) { Stop-Deploy 6 "憑證匯入失敗 (憑證內容無效，或權限不足)。" }
             Write-Log "OK" "憑證已匯入 (Thumbprint: $thumbprint)。"
         }
-        if ($tempCertPath) { Remove-Item -LiteralPath $tempCertPath -Force -ErrorAction SilentlyContinue }
     }
 
     # === Step 2: 安裝前連線檢查 ===
@@ -226,8 +241,14 @@ try {
     Write-Log "INFO" "[Step 3/4] 安裝 VEN"
 
     # VEN 24.2.10 起提供 illumio-ven-ctl.exe；23.5 以前為 illumio-ven-ctl.ps1
+    # VEN 安裝後會把實際路徑寫入 HKLM\SOFTWARE\Illumio，重跑時不必再給自訂目錄參數
+    $regInstall = ""; $regData = ""
+    $reg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Illumio" -ErrorAction SilentlyContinue
+    if ($reg) { $regInstall = "$($reg.InstallPath)"; $regData = "$($reg.DataPath)" }
+
     function Find-VenCtl {
-        foreach ($dir in @($InstallDir, $DefaultInstallDir)) {
+        foreach ($dir in @($regInstall, $InstallDir, $DefaultInstallDir)) {
+            if (-not $dir) { continue }
             foreach ($name in @("illumio-ven-ctl.exe", "illumio-ven-ctl.ps1")) {
                 $candidate = Join-Path $dir $name
                 if (Test-FileExists $candidate) { return $candidate }
@@ -245,7 +266,6 @@ try {
         if (-not $pkgDir) { $pkgDir = $PSScriptRoot }
 
         $installerPath = ""
-        $downloaded = ""
         if ($ExeFile) {
             $installerPath = Join-Path $pkgDir $ExeFile
             if (-not (Test-FileExists $installerPath)) { Stop-Deploy 8 "找不到安裝檔: $installerPath" }
@@ -265,8 +285,8 @@ try {
             if ($arch -eq "AMD64") { $arch = "x64" }
             $osParts = (Get-CimInstance -ClassName Win32_OperatingSystem).Version -split "\."
             $osVer = "$($osParts[0]).$($osParts[1])"
-            $dlFile = Join-Path $env:TEMP "illumio-ven-download.tmp"
-            $dlHeaders = Join-Path $env:TEMP "illumio-ven-download.headers"
+            $dlFile = Join-Path $WorkDir "illumio-ven-download.tmp"
+            $dlHeaders = Join-Path $WorkDir "illumio-ven-download.headers"
             $url = "https://$ManagementServer/api/$ApiVersion/software/ven/image?architecture=$arch&distribution=Windows&version=$osVer"
             Write-Log "INFO" "本機沒有安裝檔，向 PCE 下載 [$arch][Windows][$osVer]"
 
@@ -277,7 +297,7 @@ try {
                 if ($httpCode -ne "200") {
                     Remove-Item -LiteralPath $dlFile, $dlHeaders -Force -ErrorAction SilentlyContinue
                     if ($httpCode -eq "401" -or $httpCode -eq "403") { Stop-Deploy 8 "PCE 拒絕下載 (HTTP $httpCode)。請確認啟用碼有效且未過期。" }
-                    if ($httpCode -eq "406") { Stop-Deploy 8 "PCE 的 VEN Library 沒有符合 [$arch][Windows][$osVer] 的安裝檔。請自行提供安裝檔 (-ExeFile)。" }
+                    if ($httpCode -eq "406") { Stop-Deploy 8 "PCE 沒有符合 [$arch][Windows][$osVer] 的安裝檔，或啟用碼無效。請確認啟用碼，或自行提供安裝檔 (-ExeFile)。" }
                     Stop-Deploy 8 "安裝檔下載失敗 (HTTP $httpCode)。"
                 }
                 $shaLine = Select-String -LiteralPath $dlHeaders -Pattern '^x-sha256:\s*([0-9A-Fa-f]+)' | Select-Object -First 1
@@ -298,7 +318,7 @@ try {
                     $dlName = ($wc.ResponseHeaders["Content-Disposition"] -split "filename=")[1]
                 } catch {
                     Remove-Item -LiteralPath $dlFile -Force -ErrorAction SilentlyContinue
-                    Stop-Deploy 8 "安裝檔下載失敗: $($_.Exception.Message) (401 = 啟用碼無效；406 = PCE 沒有符合本機的安裝檔)"
+                    Stop-Deploy 8 "安裝檔下載失敗: $($_.Exception.Message) (401/406 = 啟用碼無效，或 PCE 沒有符合本機的安裝檔)"
                 }
             } else {
                 Stop-Deploy 8 "此系統沒有 curl.exe，且 PowerShell 處於受限語言模式，無法向 PCE 下載。請自行提供安裝檔 (-ExeFile)。"
@@ -309,14 +329,13 @@ try {
                 Stop-Deploy 8 "PCE 回應缺少檔名或 SHA256 標頭，無法驗證安裝檔。"
             }
             $dlName = Split-Path -Leaf ($dlName -replace '"', '').Trim()
-            $actualSha = (Get-FileHash -LiteralPath $dlFile -Algorithm SHA256).Hash
+            # 先改成最終檔名再驗證，執行的就是剛驗證過的那個檔案
+            $installerPath = Join-Path $WorkDir $dlName
+            Move-Item -LiteralPath $dlFile -Destination $installerPath -Force
+            $actualSha = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
             if ($actualSha -ne $expectedSha) {
-                Remove-Item -LiteralPath $dlFile -Force -ErrorAction SilentlyContinue
                 Stop-Deploy 8 "安裝檔 SHA256 不符 (預期 $expectedSha，實際 $actualSha)。"
             }
-            $installerPath = Join-Path $env:TEMP $dlName
-            Move-Item -LiteralPath $dlFile -Destination $installerPath -Force
-            $downloaded = $installerPath
             Write-Log "OK" "已下載並通過 SHA256 驗證: $dlName"
         }
 
@@ -328,7 +347,6 @@ try {
 
         Write-Log "INFO" "安裝: $installerPath"
         $proc = Start-Process -FilePath $installerPath -ArgumentList $installArgs -Wait -PassThru
-        if ($downloaded) { Remove-Item -LiteralPath $downloaded -Force -ErrorAction SilentlyContinue }
         if ($proc.ExitCode -eq 3010) {
             $rebootRequired = $true
             Write-Log "OK" "VEN 安裝完成 (安裝程式回報需要重新開機)。"
@@ -347,8 +365,10 @@ try {
 
     # 已配對的 VEN 會在資料目錄留下 agent_id.cfg；再次 activate 會失敗，故直接跳過
     $activated = $false
-    foreach ($dir in @($DataDir, $DefaultDataDir)) {
-        if (Test-FileExists (Join-Path $dir "etc\agent_id.cfg")) { $activated = $true }
+    $reg = Get-ItemProperty -Path "HKLM:\SOFTWARE\Illumio" -ErrorAction SilentlyContinue
+    if ($reg) { $regData = "$($reg.DataPath)" }
+    foreach ($dir in @($regData, $DataDir, $DefaultDataDir)) {
+        if ($dir -and (Test-FileExists (Join-Path $dir "etc\agent_id.cfg"))) { $activated = $true }
     }
 
     if ($activated) {
@@ -362,6 +382,7 @@ try {
         Write-Log "OK" "啟用完成。"
     }
 
+    Remove-WorkDir
     if ($rebootRequired) {
         Write-Log "OK" "部署完成，需要重新開機 (結束碼 3010)。"
         exit 3010
@@ -370,6 +391,7 @@ try {
     exit 0
 
 } catch {
+    Remove-WorkDir
     Write-Log "ERROR" "未預期的錯誤: $_"
     exit 1
 }

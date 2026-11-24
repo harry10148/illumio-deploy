@@ -48,7 +48,6 @@ if defined ILLUMIO_ACTIVATION_CODE set "ACTIVATION_CODE=%ILLUMIO_ACTIVATION_CODE
 set "DEFAULT_INSTALL_DIR=C:\Program Files\Illumio"
 set "DEFAULT_DATA_DIR=C:\ProgramData\Illumio"
 set "REBOOT_REQUIRED="
-set "DOWNLOADED="
 set "CURL=%SystemRoot%\System32\curl.exe"
 
 call :Log ==== Illumio VEN 部署 (Batch) ====
@@ -70,11 +69,26 @@ if "!MANAGEMENT_SERVER:~0,1!"=="<" (
     exit /b 2
 )
 
+REM 私有工作目錄：只有 SYSTEM 與 Administrators 可存取，避免暫存的憑證或安裝檔
+REM 在驗證後、使用前被其他本機帳號置換。目錄已存在時 mkdir 會失敗，不沿用既有目錄。
+set "WORK_DIR=%TEMP%\illumio-deploy-%RANDOM%-%RANDOM%-%RANDOM%"
+mkdir "%WORK_DIR%" 2>nul
+if errorlevel 1 (
+    call :Log [ERROR] 無法建立工作目錄: %WORK_DIR%
+    exit /b 1
+)
+icacls "%WORK_DIR%" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" >nul 2>&1
+if errorlevel 1 (
+    rd /s /q "%WORK_DIR%" 2>nul
+    call :Log [ERROR] 無法設定工作目錄的存取權限: %WORK_DIR%
+    exit /b 1
+)
+
 REM === Step 1: CA 憑證 ===
 call :Log [Step 1/4] 匯入 CA 憑證
 
 set "CERT_PATH="
-set "TEMP_CERT=%TEMP%\illumio-ca-embedded.crt"
+set "TEMP_CERT=%WORK_DIR%\illumio-ca-embedded.crt"
 if exist "%~dp0illumio-ca.crt" (
     set "CERT_PATH=%~dp0illumio-ca.crt"
 ) else (
@@ -101,10 +115,10 @@ call :Log [INFO]   憑證來源: !CERT_PATH!
 findstr /C:"PLACEHOLDER_CERTIFICATE_CONTENT" "!CERT_PATH!" >nul 2>&1
 if not errorlevel 1 (
     call :Log [ERROR] 憑證檔內容仍為佔位符。
-    exit /b 6
+    set "RC=6" & goto :end
 )
 REM 指紋 = DER 編碼的 SHA1：先把 PEM 轉成 DER 再取雜湊 (certutil 輸出第二行，不受語系影響)
-set "CERT_DER=%TEMP%\illumio-ca.der"
+set "CERT_DER=%WORK_DIR%\illumio-ca.der"
 del "%CERT_DER%" 2>nul
 set "HASH_SRC=%CERT_DER%"
 certutil -decode "!CERT_PATH!" "%CERT_DER%" >nul 2>&1
@@ -131,7 +145,7 @@ certutil -addstore Root "!CERT_PATH!" >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
     call :Log [ERROR] 憑證匯入失敗 ^(憑證無效或權限不足^)。詳見: %LOG_FILE%
     del "%TEMP_CERT%" 2>nul
-    exit /b 6
+    set "RC=6" & goto :end
 )
 call :Log [OK]     憑證已匯入 ^(Thumbprint: !THUMB!^)。
 del "%TEMP_CERT%" 2>nul
@@ -163,7 +177,7 @@ if defined TLS_ERR (
 ) else (
     call :Log [ERROR] 無法連線至 %MANAGEMENT_SERVER% ^(curl 結束碼 !CURL_RC!^)。請檢查 DNS、防火牆與 Proxy 設定。
 )
-exit /b 7
+set "RC=7" & goto :end
 
 :step3
 REM === Step 3: 安裝 VEN ===
@@ -191,7 +205,7 @@ if "%EXE_FILE%"=="" (
     )
     if !EXE_COUNT! GTR 1 (
         call :Log [ERROR] 在 !PKG_DIR! 找到 !EXE_COUNT! 個安裝檔，無法判斷要裝哪一個。請設定 EXE_FILE。
-        exit /b 8
+        set "RC=8" & goto :end
     )
 )
 
@@ -199,7 +213,7 @@ if not "!EXE_FILE!"=="" (
     set "INSTALLER=!PKG_DIR!!EXE_FILE!"
     if not exist "!INSTALLER!" (
         call :Log [ERROR] 找不到安裝檔: !INSTALLER!
-        exit /b 8
+        set "RC=8" & goto :end
     )
     goto :install
 )
@@ -207,11 +221,11 @@ if not "!EXE_FILE!"=="" (
 REM --- 本機沒有安裝檔：向 PCE 下載 (與官方 pair.ps1 相同的機制) ---
 if "%NO_DOWNLOAD%"=="1" (
     call :Log [ERROR] 在 !PKG_DIR! 找不到 *illumio-ven*.exe ^(已設定 NO_DOWNLOAD^)。
-    exit /b 8
+    set "RC=8" & goto :end
 )
 if not exist "%CURL%" (
     call :Log [ERROR] 在 !PKG_DIR! 找不到 *illumio-ven*.exe，且此系統沒有 curl.exe 可向 PCE 下載。請自行提供安裝檔。
-    exit /b 8
+    set "RC=8" & goto :end
 )
 
 set "DL_ARCH=%PROCESSOR_ARCHITECTURE%"
@@ -221,18 +235,21 @@ set "OS_FULLVER="
 for /f "tokens=2 delims=[]" %%A in ('ver') do for %%B in (%%A) do set "OS_FULLVER=%%B"
 for /f "tokens=1,2 delims=." %%M in ("!OS_FULLVER!") do set "DL_OSVER=%%M.%%N"
 
-set "DL_FILE=%TEMP%\illumio-ven-download.tmp"
-set "DL_HEADERS=%TEMP%\illumio-ven-download.headers"
+set "DL_FILE=%WORK_DIR%\illumio-ven-download.tmp"
+set "DL_HEADERS=%WORK_DIR%\illumio-ven-download.headers"
 call :Log [INFO]   本機沒有安裝檔，向 PCE 下載 [!DL_ARCH!][Windows][!DL_OSVER!]
 
+REM 網址含 ^& 字元，先放進變數再以延遲展開帶入；HTTP 狀態碼寫入檔案後讀回
+set "DL_URL=https://%MANAGEMENT_SERVER%/api/%API_VERSION%/software/ven/image?architecture=!DL_ARCH!&distribution=Windows&version=!DL_OSVER!"
 set "HTTP_CODE="
-for /f "delims=" %%H in ('""%CURL%" -sS --ssl-no-revoke --user "agent_0:%ACTIVATION_CODE%" --connect-timeout 10 --max-time 900 -D "%DL_HEADERS%" -o "%DL_FILE%" -w "%%{http_code}" "https://%MANAGEMENT_SERVER%/api/%API_VERSION%/software/ven/image?architecture=!DL_ARCH!^&distribution=Windows^&version=!DL_OSVER!""') do set "HTTP_CODE=%%H"
+"%CURL%" -sS --ssl-no-revoke --user "agent_0:%ACTIVATION_CODE%" --connect-timeout 10 --max-time 900 -D "%DL_HEADERS%" -o "%DL_FILE%" -w "%%{http_code}" "!DL_URL!" > "%WORK_DIR%\http_code" 2>> "%LOG_FILE%"
+set /p HTTP_CODE=<"%WORK_DIR%\http_code"
 if not "!HTTP_CODE!"=="200" (
     del "%DL_FILE%" "%DL_HEADERS%" 2>nul
     if "!HTTP_CODE!"=="401" call :Log [ERROR] PCE 拒絕下載 ^(HTTP 401^)。請確認啟用碼有效且未過期。
-    if "!HTTP_CODE!"=="406" call :Log [ERROR] PCE 的 VEN Library 沒有符合 [!DL_ARCH!][Windows][!DL_OSVER!] 的安裝檔。請自行提供安裝檔。
+    if "!HTTP_CODE!"=="406" call :Log [ERROR] PCE 沒有符合 [!DL_ARCH!][Windows][!DL_OSVER!] 的安裝檔，或啟用碼無效。
     call :Log [ERROR] 安裝檔下載失敗 ^(HTTP !HTTP_CODE!^)。
-    exit /b 8
+    set "RC=8" & goto :end
 )
 
 set "EXPECTED_SHA="
@@ -240,28 +257,25 @@ set "DL_NAME="
 for /f "tokens=2 delims=: " %%H in ('findstr /i /b "x-sha256:" "%DL_HEADERS%"') do set "EXPECTED_SHA=%%H"
 for /f "tokens=2 delims==" %%H in ('findstr /i /b "content-disposition:" "%DL_HEADERS%"') do set "DL_NAME=%%~nxH"
 del "%DL_HEADERS%" 2>nul
-if not defined EXPECTED_SHA goto :dl_bad_headers
-if not defined DL_NAME goto :dl_bad_headers
+if not defined EXPECTED_SHA set "DL_NAME="
+if not defined DL_NAME (
+    call :Log [ERROR] PCE 回應缺少檔名或 SHA256 標頭，無法驗證安裝檔。
+    goto :fail8
+)
 
+REM 先改成最終檔名再驗證，執行的就是剛驗證過的那個檔案
+set "INSTALLER=%WORK_DIR%\!DL_NAME!"
+move /y "%DL_FILE%" "!INSTALLER!" >nul
 REM certutil -hashfile 的第二行是雜湊值
 set "ACTUAL_SHA="
-for /f "skip=1 delims=" %%H in ('certutil -hashfile "%DL_FILE%" SHA256') do if not defined ACTUAL_SHA set "ACTUAL_SHA=%%H"
-set "ACTUAL_SHA=!ACTUAL_SHA: =!"
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "!INSTALLER!" SHA256') do if not defined ACTUAL_SHA set "ACTUAL_SHA=%%H"
+if defined ACTUAL_SHA set "ACTUAL_SHA=!ACTUAL_SHA: =!"
 if /i not "!ACTUAL_SHA!"=="!EXPECTED_SHA!" (
-    del "%DL_FILE%" 2>nul
     call :Log [ERROR] 安裝檔 SHA256 不符 ^(預期 !EXPECTED_SHA!，實際 !ACTUAL_SHA!^)。
-    exit /b 8
+    goto :fail8
 )
-set "INSTALLER=%TEMP%\!DL_NAME!"
-move /y "%DL_FILE%" "!INSTALLER!" >nul
-set "DOWNLOADED=!INSTALLER!"
 call :Log [OK]     已下載並通過 SHA256 驗證: !DL_NAME!
 goto :install
-
-:dl_bad_headers
-del "%DL_FILE%" 2>nul
-call :Log [ERROR] PCE 回應缺少檔名或 SHA256 標頭，無法驗證安裝檔。
-exit /b 8
 
 :install
 set "VEN_INSTALL_LOG=%TEMP%\IllumioVENInstall.log"
@@ -273,14 +287,13 @@ if /i not "%DATA_DIR%"=="%DEFAULT_DATA_DIR%" set "EXTRA_ARGS=!EXTRA_ARGS! DATAFO
 call :Log [INFO]   安裝: !INSTALLER!
 "!INSTALLER!" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" !EXTRA_ARGS! >> "%LOG_FILE%" 2>&1
 set "INSTALL_RC=!errorlevel!"
-if defined DOWNLOADED del "!DOWNLOADED!" 2>nul
 
 if "!INSTALL_RC!"=="3010" (
     set "REBOOT_REQUIRED=1"
     call :Log [OK]     VEN 安裝完成 ^(安裝程式回報需要重新開機^)。
 ) else if not "!INSTALL_RC!"=="0" (
     call :Log [ERROR] 安裝失敗 ^(安裝程式結束碼 !INSTALL_RC!^)。詳見: %VEN_INSTALL_LOG%
-    exit /b 8
+    set "RC=8" & goto :end
 ) else (
     call :Log [OK]     VEN 安裝完成。
 )
@@ -288,7 +301,7 @@ if "!INSTALL_RC!"=="3010" (
 call :FindCtl
 if not defined VEN_CTL (
     call :Log [ERROR] 安裝後仍找不到 illumio-ven-ctl.exe。詳見: %VEN_INSTALL_LOG%
-    exit /b 8
+    set "RC=8" & goto :end
 )
 
 :step4
@@ -299,6 +312,7 @@ REM 已配對的 VEN 會在資料目錄留下 agent_id.cfg；再次 activate 會
 set "ACTIVATED="
 if exist "%DATA_DIR%\etc\agent_id.cfg" set "ACTIVATED=1"
 if exist "%DEFAULT_DATA_DIR%\etc\agent_id.cfg" set "ACTIVATED=1"
+if defined REG_DATA if exist "!REG_DATA!etc\agent_id.cfg" set "ACTIVATED=1"
 if defined ACTIVATED (
     call :Log [SKIP]   VEN 已啟用，跳過啟用。
     goto :done
@@ -308,17 +322,24 @@ call :Log [INFO]   PCE: %MANAGEMENT_SERVER%
 "!VEN_CTL!" activate -activation-code %ACTIVATION_CODE% -management-server %MANAGEMENT_SERVER% >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
     call :Log [ERROR] 啟用失敗。請確認啟用碼有效且未超過使用次數。詳見: %LOG_FILE%
-    exit /b 9
+    set "RC=9" & goto :end
 )
 call :Log [OK]     啟用完成。
 
 :done
 if defined REBOOT_REQUIRED (
     call :Log [OK]     部署完成，需要重新開機 ^(結束碼 3010^)。
-    exit /b 3010
+    set "RC=3010" & goto :end
 )
 call :Log [OK]     部署完成。
-exit /b 0
+set "RC=0" & goto :end
+
+REM 統一出口：清除工作目錄後以 RC 結束
+:fail8
+set "RC=8"
+:end
+rd /s /q "%WORK_DIR%" 2>nul
+exit /b %RC%
 
 REM ==========================================
 REM 副程式
@@ -332,6 +353,12 @@ REM 尋找 illumio-ven-ctl.exe (VEN 24.2.10 起提供)。
 REM 23.5 以前的 VEN 只有 illumio-ven-ctl.ps1，請改用 Deploy-Illumio.ps1。
 :FindCtl
 set "VEN_CTL="
+set "REG_INSTALL="
+set "REG_DATA="
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Illumio" /v InstallPath 2^>nul ^| findstr /i "InstallPath"') do set "REG_INSTALL=%%B"
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Illumio" /v DataPath 2^>nul ^| findstr /i "DataPath"') do set "REG_DATA=%%B"
 if exist "%DEFAULT_INSTALL_DIR%\illumio-ven-ctl.exe" set "VEN_CTL=%DEFAULT_INSTALL_DIR%\illumio-ven-ctl.exe"
 if exist "%INSTALL_DIR%\illumio-ven-ctl.exe" set "VEN_CTL=%INSTALL_DIR%\illumio-ven-ctl.exe"
+REM VEN 安裝後會把實際路徑寫入 HKLM\SOFTWARE\Illumio，重跑時不必再設定自訂目錄
+if defined REG_INSTALL if exist "!REG_INSTALL!illumio-ven-ctl.exe" set "VEN_CTL=!REG_INSTALL!illumio-ven-ctl.exe"
 exit /b 0

@@ -37,7 +37,7 @@ PLACEHOLDER_CERTIFICATE_CONTENT_REPLACE_WITH_YOUR_ACTUAL_CERTIFICATE
 # Get-PfxCertificate 遇到無效內容會停在密碼提示，不能用於無人值守。
 function Get-CertThumbprint {
     param([string]$Path)
-    $der = Join-Path $env:TEMP "illumio-ca.der"
+    $der = Join-Path $WorkDir "illumio-ca.der"
     Remove-Item -LiteralPath $der -Force -ErrorAction SilentlyContinue
     & certutil.exe -decode $Path $der | Out-Null
     $src = $der
@@ -52,11 +52,13 @@ function Get-CertThumbprint {
 
 function Stop-Import {
     param([int]$Code, [string]$Message)
+    if ($WorkDir) { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
     Write-Output "[ERROR] $Message"
     exit $Code
 }
 
-$tempCertPath = ""
+# 私有工作目錄：只有 SYSTEM 與 Administrators 可存取，避免暫存的憑證在匯入前被置換
+$WorkDir = ""
 try {
     Write-Output "==== Illumio CA 憑證匯入 ===="
 
@@ -67,6 +69,11 @@ try {
         Stop-Import 3 "需要以系統管理員身分執行。"
     }
 
+    $WorkDir = Join-Path $env:TEMP ("illumio-deploy-{0}-{1}-{2}" -f $PID, (Get-Random), (Get-Random))
+    New-Item -ItemType Directory -Path $WorkDir | Out-Null      # 目錄已存在時會失敗，不沿用既有目錄
+    & icacls.exe $WorkDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "無法設定工作目錄的存取權限: $WorkDir" }
+
     # 憑證來源優先序: -CertFile > 同目錄 illumio-ca.crt > 內嵌憑證
     $certPath = ""
     $localCertPath = Join-Path $PSScriptRoot "illumio-ca.crt"
@@ -76,9 +83,8 @@ try {
     } elseif (Test-Path -LiteralPath $localCertPath) {
         $certPath = $localCertPath
     } elseif ($EmbeddedCertContent -notlike "*PLACEHOLDER_CERTIFICATE_CONTENT*") {
-        $tempCertPath = Join-Path $env:TEMP "illumio-ca-embedded.crt"
-        Set-Content -Path $tempCertPath -Value $EmbeddedCertContent -Encoding Ascii
-        $certPath = $tempCertPath
+        $certPath = Join-Path $WorkDir "illumio-ca-embedded.crt"
+        Set-Content -Path $certPath -Value $EmbeddedCertContent -Encoding Ascii
     }
     if (-not $certPath) {
         Stop-Import 6 "未提供 CA 憑證。請用 -CertFile 指定，或將 illumio-ca.crt 放在腳本同目錄。"
@@ -107,5 +113,5 @@ try {
     Write-Output "[ERROR] 未預期的錯誤: $_"
     exit 1
 } finally {
-    if ($tempCertPath) { Remove-Item -LiteralPath $tempCertPath -Force -ErrorAction SilentlyContinue }
+    if ($WorkDir) { Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue }
 }
