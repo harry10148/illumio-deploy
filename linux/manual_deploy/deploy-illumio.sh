@@ -35,6 +35,8 @@ CERT_FILE=""        # CA 憑證路徑；留空 = 腳本同目錄 illumio-ca.crt�
 LOG_FILE="/var/log/illumio-deploy.log"
 SKIP_TLS_CHECK=0    # 1 = 略過安裝前的 PCE 連線檢查
 NO_DOWNLOAD=0       # 1 = 本機沒有安裝包時不向 PCE 下載，直接失敗
+INSTALL_PREFIX=""   # 程式的上層目錄 (僅 RPM)；留空 = /opt，VEN 會裝在 <目錄>/illumio_ven
+DATA_PREFIX=""      # 資料的上層目錄；留空 = /opt，資料會放在 <目錄>/illumio_ven_data
 API_VERSION="v25"   # 下載安裝包使用的 PCE API 版本 (較新的 PCE 仍接受較舊的版本)
 # ==========================================
 
@@ -49,8 +51,7 @@ CERT_EOF
 # 結束碼 (各平台腳本一致，供派送工具判讀)
 EX_OK=0; EX_USAGE=2; EX_PRIV=3; EX_OS=4; EX_DEPS=5; EX_CERT=6; EX_NET=7; EX_INSTALL=8; EX_ACTIVATE=9
 
-VEN_DIR="/opt/illumio_ven"
-VEN_CTL="$VEN_DIR/illumio-ven-ctl"
+DEFAULT_VEN_CTL="/opt/illumio_ven/illumio-ven-ctl"
 
 usage() {
     cat << 'USAGE_EOF'
@@ -62,6 +63,9 @@ usage() {
   --source-dir DIR               安裝包所在目錄。預設: 腳本所在目錄
   --package FILE                 安裝包檔名或絕對路徑。預設: 自動尋找；找不到則向 PCE 下載
   --no-download                  本機沒有安裝包時不向 PCE 下載，直接失敗
+  --install-prefix DIR           程式的上層目錄 (僅 RPM；DEB 不支援)。預設: /opt
+  --data-prefix DIR              資料的上層目錄。預設: /opt
+                                 (自訂目錄只在初次安裝時生效；DEB 的資料目錄之後無法搬移)
   --api-version vNN              下載安裝包使用的 PCE API 版本。預設: v25
   --log-file PATH                日誌檔。預設: /var/log/illumio-deploy.log
   --skip-tls-check               略過安裝前的 PCE TLS 連線檢查
@@ -119,6 +123,8 @@ while [ $# -gt 0 ]; do
         --log-file)          need_value "$@"; LOG_FILE="$2"; shift 2 ;;
         --skip-tls-check)    SKIP_TLS_CHECK=1; shift ;;
         --no-download)       NO_DOWNLOAD=1; shift ;;
+        --install-prefix)    need_value "$@"; INSTALL_PREFIX="$2"; shift 2 ;;
+        --data-prefix)       need_value "$@"; DATA_PREFIX="$2"; shift 2 ;;
         --api-version)       need_value "$@"; API_VERSION="$2"; shift 2 ;;
         -h|--help)           usage; exit "$EX_OK" ;;
         *) echo "[ERROR] 不認得的選項: $1" >&2; usage >&2; exit "$EX_USAGE" ;;
@@ -139,6 +145,9 @@ case "$MANAGEMENT_SERVER" in ''|'<'*) die "$EX_USAGE" "未設定 PCE 位址。�
 if ! [[ "$MANAGEMENT_SERVER" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then
     die "$EX_USAGE" "PCE 位址格式應為 主機名稱:埠號 (例如 pce.example.com:8443)，目前為: $MANAGEMENT_SERVER"
 fi
+for dir_opt in "$INSTALL_PREFIX" "$DATA_PREFIX"; do
+    case "$dir_opt" in ''|/*) ;; *) die "$EX_USAGE" "--install-prefix 與 --data-prefix 必須是絕對路徑，目前為: $dir_opt" ;; esac
+done
 [[ "$API_VERSION" =~ ^v[0-9]+$ ]] || die "$EX_USAGE" "--api-version 格式應為 vNN (例如 v25)，目前為: $API_VERSION"
 
 # ---------- Step 1: 偵測 OS ----------
@@ -193,6 +202,21 @@ vendor_pkg_list() {
         echo "curl dnsutils|bind9-dnsutils libcap2 libgmp10 libmnl0 libnfnetlink0 ipset net-tools sed uuid-runtime"
     fi
 }
+
+# 以套件管理員記錄的檔案清單找出 illumio-ven-ctl，自訂安裝目錄時也找得到
+find_ven_ctl() {
+    local found=""
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        found=$(rpm -ql illumio-ven 2>/dev/null | grep -m1 '/illumio-ven-ctl$')
+    else
+        found=$(dpkg -L illumio-ven 2>/dev/null | grep -m1 '/illumio-ven-ctl$')
+    fi
+    echo "${found:-$DEFAULT_VEN_CTL}"
+}
+
+if [ "$OS_FAMILY" = "debian" ] && [ -n "$INSTALL_PREFIX" ]; then
+    die "$EX_USAGE" "DEB 套件不支援自訂程式目錄 (--install-prefix)。只能用 --data-prefix 自訂資料目錄。"
+fi
 
 command -v curl > /dev/null 2>&1 || die "$EX_DEPS" "找不到 curl。請先安裝 curl 套件。"
 
@@ -328,7 +352,7 @@ else
     # 相依套件以安裝包本身的宣告為準：用套件管理員試裝，不實際變更系統
     log INFO "檢查相依套件: $(basename "$PKG_PATH")"
     if [ "$OS_FAMILY" = "rhel" ]; then
-        dep_out=$(rpm -i --test --nosignature "$PKG_PATH" 2>&1); dep_rc=$?
+        dep_out=$(rpm -i --test --nosignature ${INSTALL_PREFIX:+--prefix "$INSTALL_PREFIX"} "$PKG_PATH" 2>&1); dep_rc=$?
     else
         dep_out=$(dpkg --dry-run -i "$PKG_PATH" 2>&1); dep_rc=$?
     fi
@@ -355,19 +379,51 @@ else
     fi
 
     log INFO "安裝: $PKG_PATH"
+    [ -n "$INSTALL_PREFIX" ] && log INFO "程式上層目錄: $INSTALL_PREFIX"
+    [ -n "$DATA_PREFIX" ] && log INFO "資料上層目錄: $DATA_PREFIX"
+    # SELinux 啟用時，自訂目錄預設的標籤會讓 systemd 無法執行 VEN 常駐程式。
+    # 讓自訂目錄比照 /opt 的標籤規則：有 semanage 就建立永久規則，沒有則安裝後暫時標記。
+    SELINUX_DIRS=()
+    if command -v getenforce > /dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+        [ -n "$INSTALL_PREFIX" ] && SELINUX_DIRS+=("$INSTALL_PREFIX")
+        [ -n "$DATA_PREFIX" ] && [ "$DATA_PREFIX" != "$INSTALL_PREFIX" ] && SELINUX_DIRS+=("$DATA_PREFIX")
+    fi
+    SELINUX_PERSISTENT=1
+    for d in ${SELINUX_DIRS[@]+"${SELINUX_DIRS[@]}"}; do
+        mkdir -p "$d" || die "$EX_INSTALL" "無法建立目錄: $d"
+        if command -v semanage > /dev/null 2>&1; then
+            semanage fcontext -a -e /opt "$d" >> "$LOG_FILE" 2>&1 || semanage fcontext -m -e /opt "$d" >> "$LOG_FILE" 2>&1 || SELINUX_PERSISTENT=0
+        else
+            SELINUX_PERSISTENT=0
+        fi
+    done
+
+    # VEN_DATA_DIR 與 rpm --prefix 是原廠文件記載的自訂目錄方式，兩者可各自獨立指定
     if [ "$OS_FAMILY" = "rhel" ]; then
-        rpm -ivh "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
+        env ${DATA_PREFIX:+VEN_DATA_DIR="$DATA_PREFIX"} rpm -ivh ${INSTALL_PREFIX:+--prefix "$INSTALL_PREFIX"} "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
     else
-        DEBIAN_FRONTEND=noninteractive dpkg -i "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
+        env ${DATA_PREFIX:+VEN_DATA_DIR="$DATA_PREFIX"} DEBIAN_FRONTEND=noninteractive dpkg -i "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
     fi
     install_rc="${PIPESTATUS[0]}"
     [ "$install_rc" -eq 0 ] || die "$EX_INSTALL" "套件安裝失敗 (結束碼 $install_rc)。"
+
+    for d in ${SELINUX_DIRS[@]+"${SELINUX_DIRS[@]}"}; do
+        if [ "$SELINUX_PERSISTENT" = "1" ]; then
+            restorecon -R "$d" >> "$LOG_FILE" 2>&1
+            log OK "SELinux: $d 已比照 /opt 設定標籤 (永久規則)。"
+        else
+            chcon -R --reference=/opt "$d" >> "$LOG_FILE" 2>&1
+            log WARN "SELinux: $d 已暫時比照 /opt 標記，但系統沒有 semanage，全系統重新標記後會失效。"
+            log WARN "  請安裝 policycoreutils-python-utils 後執行: semanage fcontext -a -e /opt $d && restorecon -R $d"
+        fi
+    done
     log OK "VEN 安裝完成。"
 fi
 
 # ---------- Step 5: 啟用 ----------
 step "Step 5/5: 向 PCE 啟用"
 
+VEN_CTL="$(find_ven_ctl)"
 [ -x "$VEN_CTL" ] || die "$EX_ACTIVATE" "找不到 $VEN_CTL，VEN 可能未正確安裝。"
 
 # 未配對的 VEN 回報 "Agent state: unpaired"；其他狀態 (idle、illuminated、enforced 等) 代表已配對，
