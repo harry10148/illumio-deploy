@@ -1,206 +1,333 @@
 #!/bin/bash
 ###############################################################################
-# Illumio VEN — 方式二：手動安裝 + 手動回報 (Linux)
+# Illumio VEN — 方式二：完整部署 (Linux)
 #
-# 功能:
-#   1. 偵測 OS 類型 (RHEL 7 / RHEL 8+ / Ubuntu/Debian)
-#   2. 檢查相依套件 — 缺件即停止 (不自動安裝)
-#   3. 匯入自簽 CA 憑證 (含防重複檢查)
-#   4. 安裝 VEN 套件 (rpm/dpkg)
-#   5. 執行 activation 回報至 PCE
+# 流程:
+#   1. 偵測 OS (RHEL 系 / Debian 系)
+#   2. 檢查相依套件 — 缺件即停止 (不自動安裝、不連外)
+#   3. 匯入 PCE 的 CA 憑證 (未提供憑證則跳過，改用系統既有信任)
+#   4. 安裝前檢查到 PCE 的 TLS 連線 (信任鏈不通即停止，不留下半套安裝)
+#   5. 安裝 VEN 套件 (已安裝則跳過)
+#   6. 向 PCE 啟用 (已啟用則跳過)
 #
-# 使用方式:
-#   sudo bash deploy-illumio.sh
+# 用法:
+#   sudo bash deploy-illumio.sh --management-server pce.example.com:8443 \
+#        --activation-code <CODE>
 #
-# 注意:
-#   - 需要 root 權限
-#   - VEN RPM/DEB 安裝包需與此腳本放在同一目錄
+#   參數未指定時依序取用: 環境變數 → 下方設定區。
+#   完整選項見 --help。可重複執行；全程不需互動。
+#
+# 只使用系統內建工具 (bash、coreutils、rpm/dpkg、curl)。
 ###############################################################################
 
-set -e
+set -u
+set -o pipefail
 
 # ==========================================
-# 設定區 (請依環境修改)
+# 設定區 (可改這裡，也可用參數或環境變數覆蓋)
 # ==========================================
 ACTIVATION_CODE="<YOUR_ACTIVATION_CODE>"
 MANAGEMENT_SERVER="<YOUR_PCE_FQDN:PORT>"
-SOURCE_DIR=""      # 留空=自動尋找腳本所在目錄，可指定絕對路徑例如 "/tmp/installers"
-VEN_RPM_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .rpm；指定時請填檔名（相對於 SOURCE_DIR），勿填絕對路徑
-VEN_DEB_FILE=""    # 留空=自動偵測 SOURCE_DIR 內的 .deb；指定時請填檔名（相對於 SOURCE_DIR），勿填絕對路徑
+SOURCE_DIR=""       # 安裝包所在目錄；留空 = 腳本所在目錄
+VEN_PACKAGE=""      # 安裝包檔名或絕對路徑；留空 = 自動尋找 *illumio-ven*.rpm / .deb
+CERT_FILE=""        # CA 憑證路徑；留空 = 腳本同目錄 illumio-ca.crt，其次內嵌憑證
+LOG_FILE="/var/log/illumio-deploy.log"
+SKIP_TLS_CHECK=0    # 1 = 略過安裝前的 PCE 連線檢查
 # ==========================================
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-
-print_header() { echo ""; echo -e "${BLUE}============================================${NC}"; echo -e "${BLUE} $1${NC}"; echo -e "${BLUE}============================================${NC}"; echo ""; }
-print_ok()   { echo -e "  ${GREEN}[OK]${NC}     $1"; }
-print_fail() { echo -e "  ${RED}[FAIL]${NC}   $1"; }
-print_skip() { echo -e "  ${YELLOW}[SKIP]${NC}   $1"; }
-print_info() { echo -e "  ${BLUE}[INFO]${NC}   $1"; }
-print_error(){ echo -e "  ${RED}[ERROR]${NC}  $1"; }
-
-# 權限檢查
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}[ERROR] 需要 root 權限。請使用 sudo 執行。${NC}"; exit 1
-fi
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# 必填參數 fail-fast：避免安裝完成後才發現未設定，留下已安裝未啟用的狀態
-if [ "$ACTIVATION_CODE" = "<YOUR_ACTIVATION_CODE>" ] || [ "$MANAGEMENT_SERVER" = "<YOUR_PCE_FQDN:PORT>" ]; then
-    print_error "請先修改腳本設定區的 ACTIVATION_CODE 和 MANAGEMENT_SERVER。"
-    exit 1
-fi
-
-# === Step 1: 偵測 OS ===
-print_header "Step 1/5: 偵測作業系統"
-
-OS_TYPE=""; OS_VERSION=""
-if [ -f /etc/os-release ]; then
-    . /etc/os-release; OS_TYPE="$ID"; OS_VERSION="$VERSION_ID"
-elif [ -f /etc/redhat-release ]; then
-    OS_TYPE="rhel"; OS_VERSION=$(grep -oE '[0-9]+' /etc/redhat-release | head -1)
-fi
-MAJOR_VERSION=$(echo "$OS_VERSION" | cut -d. -f1)
-print_info "OS: $OS_TYPE $OS_VERSION"
-
-# === Step 2: 檢查相依套件 ===
-print_header "Step 2/5: 檢查相依套件"
-
-MISSING_PKGS=()
-case "$OS_TYPE" in
-    rhel|centos|rocky|almalinux|ol)
-        if [ "$MAJOR_VERSION" -le 7 ]; then
-            REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
-        else
-            REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
-        fi
-        for pkg in "${REQUIRED_PKGS[@]}"; do
-            if rpm -q "$pkg" &>/dev/null; then print_ok "$pkg"; else print_fail "$pkg"; MISSING_PKGS+=("$pkg"); fi
-        done ;;
-    ubuntu|debian)
-        REQUIRED_PKGS=(dnsutils curl libgmp10 ipset iptables libcap2 libmnl0 libnfnetlink0 net-tools sed uuid-runtime apt-transport-https)
-        for pkg in "${REQUIRED_PKGS[@]}"; do
-            if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then print_ok "$pkg"; else print_fail "$pkg"; MISSING_PKGS+=("$pkg"); fi
-        done ;;
-    *) print_error "不支援的 OS: $OS_TYPE"; exit 1 ;;
-esac
-
-if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
-    echo ""; print_error "以下套件缺失，腳本停止:"; echo ""
-    for pkg in "${MISSING_PKGS[@]}"; do echo -e "  ${RED}• $pkg${NC}"; done; echo ""
-    case "$OS_TYPE" in
-        rhel|centos|rocky|almalinux|ol)
-            [ "$MAJOR_VERSION" -le 7 ] && echo "  sudo yum install -y ${MISSING_PKGS[*]}" || echo "  sudo dnf install -y ${MISSING_PKGS[*]}" ;;
-        ubuntu|debian) echo "  sudo apt-get install -y ${MISSING_PKGS[*]}" ;;
-    esac
-    echo ""; echo -e "${RED}安裝後請重新執行此腳本。${NC}"; exit 1
-fi
-print_ok "所有相依套件已安裝。"
-
-# === Step 3: 匯入憑證 ===
-print_header "Step 3/5: 匯入自簽 CA 憑證"
-
-CERT_CONTENT=$(cat << 'CERT_EOF'
+# 內嵌憑證 (選用)。保留佔位符 = 不使用內嵌憑證。
+EMBEDDED_CERT=$(cat << 'CERT_EOF'
 -----BEGIN CERTIFICATE-----
 PLACEHOLDER_CERTIFICATE_CONTENT_REPLACE_WITH_YOUR_ACTUAL_CERTIFICATE
 -----END CERTIFICATE-----
 CERT_EOF
 )
 
-# 優先使用腳本同目錄下的 illumio-ca.crt，若有則覆蓋內嵌憑證
-if [ -f "$SCRIPT_DIR/illumio-ca.crt" ]; then
-    print_info "使用外部憑證: $SCRIPT_DIR/illumio-ca.crt"
-    CERT_CONTENT=$(cat "$SCRIPT_DIR/illumio-ca.crt")
+# 結束碼 (各平台腳本一致，供派送工具判讀)
+EX_OK=0; EX_USAGE=2; EX_PRIV=3; EX_OS=4; EX_DEPS=5; EX_CERT=6; EX_NET=7; EX_INSTALL=8; EX_ACTIVATE=9
+
+VEN_DIR="/opt/illumio_ven"
+VEN_DATA_DIR="/opt/illumio_ven_data"
+VEN_CTL="$VEN_DIR/illumio-ven-ctl"
+
+usage() {
+    cat << 'USAGE_EOF'
+用法: sudo bash deploy-illumio.sh [選項]
+
+  --management-server HOST:PORT  PCE 位址 (環境變數 ILLUMIO_MANAGEMENT_SERVER)
+  --activation-code CODE         啟用碼 (環境變數 ILLUMIO_ACTIVATION_CODE)
+  --cert-file PATH               CA 憑證 (PEM)。預設: 腳本同目錄 illumio-ca.crt
+  --source-dir DIR               安裝包所在目錄。預設: 腳本所在目錄
+  --package FILE                 安裝包檔名或絕對路徑。預設: 自動尋找
+  --log-file PATH                日誌檔。預設: /var/log/illumio-deploy.log
+  --skip-tls-check               略過安裝前的 PCE TLS 連線檢查
+  -h, --help                     顯示本說明
+
+結束碼:
+  0 成功 (含已安裝、已啟用而跳過)   2 參數錯誤        3 權限不足
+  4 不支援的作業系統                5 相依套件缺失    6 憑證無效或匯入失敗
+  7 無法連線或無法驗證 PCE          8 安裝失敗        9 啟用失敗
+USAGE_EOF
+}
+
+# ---------- 輸出與日誌 ----------
+if [ -t 1 ]; then
+    C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[1;33m'; C_BLUE='\033[0;34m'; C_NC='\033[0m'
 else
-    print_info "使用腳本內嵌憑證"
+    C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_NC=''
 fi
 
-# 佔位符與格式防呆：避免把無效內容寫入系統信任區後仍回報成功
-if [[ "$CERT_CONTENT" == *PLACEHOLDER_CERTIFICATE_CONTENT* ]]; then
-    print_error "內嵌憑證仍為佔位符，且 $SCRIPT_DIR/illumio-ca.crt 不存在。"
-    print_error "請將實際 CA 憑證命名為 illumio-ca.crt 放在腳本同目錄，或替換腳本內嵌憑證。"
-    exit 1
-fi
-if command -v openssl &>/dev/null && ! echo "$CERT_CONTENT" | openssl x509 -noout 2>/dev/null; then
-    print_error "憑證內容不是有效的 PEM 憑證。"
-    exit 1
+log() {
+    local level="$1"; shift
+    local color="$C_BLUE"
+    case "$level" in
+        OK) color="$C_GREEN" ;; SKIP|WARN) color="$C_YELLOW" ;; FAIL|ERROR) color="$C_RED" ;;
+    esac
+    printf '  %b[%s]%b %s\n' "$color" "$level" "$C_NC" "$*"
+    { printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" >> "$LOG_FILE"; } 2>/dev/null
+}
+
+step() {
+    printf '\n%b== %s ==%b\n' "$C_BLUE" "$*" "$C_NC"
+    { printf '[%s] == %s ==\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"; } 2>/dev/null
+}
+
+die() {
+    local code="$1"; shift
+    log ERROR "$*"
+    log ERROR "部署中止 (結束碼 $code)。日誌: $LOG_FILE"
+    exit "$code"
+}
+
+# ---------- 參數 ----------
+ACTIVATION_CODE="${ILLUMIO_ACTIVATION_CODE:-$ACTIVATION_CODE}"
+MANAGEMENT_SERVER="${ILLUMIO_MANAGEMENT_SERVER:-$MANAGEMENT_SERVER}"
+
+need_value() { [ $# -ge 2 ] || { echo "[ERROR] 選項 $1 需要一個值。" >&2; exit "$EX_USAGE"; }; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --management-server) need_value "$@"; MANAGEMENT_SERVER="$2"; shift 2 ;;
+        --activation-code)   need_value "$@"; ACTIVATION_CODE="$2"; shift 2 ;;
+        --cert-file)         need_value "$@"; CERT_FILE="$2"; shift 2 ;;
+        --source-dir)        need_value "$@"; SOURCE_DIR="$2"; shift 2 ;;
+        --package)           need_value "$@"; VEN_PACKAGE="$2"; shift 2 ;;
+        --log-file)          need_value "$@"; LOG_FILE="$2"; shift 2 ;;
+        --skip-tls-check)    SKIP_TLS_CHECK=1; shift ;;
+        -h|--help)           usage; exit "$EX_OK" ;;
+        *) echo "[ERROR] 不認得的選項: $1" >&2; usage >&2; exit "$EX_USAGE" ;;
+    esac
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[ERROR] 需要 root 權限。請以 root 或 sudo 執行。" >&2
+    exit "$EX_PRIV"
 fi
 
-case "$OS_TYPE" in
-    rhel|centos|rocky|almalinux|ol) CERT_DIR="/etc/pki/ca-trust/source/anchors"; UPDATE_CMD="update-ca-trust force-enable && update-ca-trust extract" ;;
-    ubuntu|debian) CERT_DIR="/usr/local/share/ca-certificates"; UPDATE_CMD="update-ca-certificates" ;;
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+umask 022
+
+# 必填參數先驗證，避免安裝完才發現無法啟用
+case "$ACTIVATION_CODE" in ''|'<'*) die "$EX_USAGE" "未設定啟用碼。請用 --activation-code 或環境變數 ILLUMIO_ACTIVATION_CODE。" ;; esac
+case "$MANAGEMENT_SERVER" in ''|'<'*) die "$EX_USAGE" "未設定 PCE 位址。請用 --management-server 或環境變數 ILLUMIO_MANAGEMENT_SERVER。" ;; esac
+if ! [[ "$MANAGEMENT_SERVER" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then
+    die "$EX_USAGE" "PCE 位址格式應為 主機名稱:埠號 (例如 pce.example.com:8443)，目前為: $MANAGEMENT_SERVER"
+fi
+
+# ---------- Step 1: 偵測 OS ----------
+step "Step 1/6: 偵測作業系統"
+
+OS_ID=""; OS_LIKE=""; OS_VERSION=""
+if [ -r /etc/os-release ]; then
+    OS_ID=$(. /etc/os-release; echo "${ID:-}")
+    OS_LIKE=$(. /etc/os-release; echo "${ID_LIKE:-}")
+    OS_VERSION=$(. /etc/os-release; echo "${VERSION_ID:-}")
+elif [ -r /etc/redhat-release ]; then
+    OS_ID="rhel"; OS_VERSION=$(grep -oE '[0-9]+' /etc/redhat-release | head -1)
+fi
+
+OS_FAMILY=""
+case "$OS_ID" in
+    rhel|centos|rocky|almalinux|ol) OS_FAMILY="rhel" ;;
+    ubuntu|debian)                  OS_FAMILY="debian" ;;
+    *)
+        case " $OS_LIKE " in
+            *" rhel "*)   OS_FAMILY="rhel" ;;
+            *" debian "*) OS_FAMILY="debian" ;;
+        esac ;;
 esac
-CERT_FILE="$CERT_DIR/illumio-ca.crt"
+[ -n "$OS_FAMILY" ] || die "$EX_OS" "不支援的作業系統: ${OS_ID:-未知} ${OS_VERSION}"
 
-if [ -f "$CERT_FILE" ] && [ "$(cat "$CERT_FILE")" = "$CERT_CONTENT" ]; then
-    print_skip "憑證已存在，跳過匯入。"
-else
-    mkdir -p "$CERT_DIR"
-    echo "$CERT_CONTENT" > "$CERT_FILE"
-    chmod 644 "$CERT_FILE"
-    eval "$UPDATE_CMD"
-    print_ok "憑證匯入成功。"
-fi
+OS_MAJOR="${OS_VERSION%%.*}"
+log INFO "作業系統: $OS_ID $OS_VERSION ($OS_FAMILY 系)"
 
-# === Step 4: 安裝 VEN ===
-print_header "Step 4/5: 安裝 VEN 套件"
+# ---------- Step 2: 相依套件 ----------
+step "Step 2/6: 檢查相依套件"
 
-# 先確認 VEN 是否已安裝，已安裝則跳過此步驟
-VEN_ALREADY_INSTALLED=false
-case "$OS_TYPE" in
-    rhel|centos|rocky|almalinux|ol)
-        rpm -q illumio-ven &>/dev/null && VEN_ALREADY_INSTALLED=true ;;
-    ubuntu|debian)
-        dpkg -l illumio-ven 2>/dev/null | grep -q "^ii" && VEN_ALREADY_INSTALLED=true ;;
-esac
-
-if [ "$VEN_ALREADY_INSTALLED" = true ]; then
-    print_skip "VEN 已安裝，跳過安裝步驟。"
-else
-    if [ -z "$SOURCE_DIR" ]; then
-        TARGET_DIR="$SCRIPT_DIR"
+# 以 | 分隔的名稱視為同一項需求的替代套件，任一已安裝即可
+if [ "$OS_FAMILY" = "rhel" ]; then
+    if [[ "$OS_MAJOR" =~ ^[0-9]+$ ]] && [ "$OS_MAJOR" -le 7 ]; then
+        REQUIRED_PKGS=(bind-utils curl gmp ipset iptables libcap libmnl libnfnetlink net-tools sed)
+        PKG_INSTALL_CMD="yum install -y"
     else
-        TARGET_DIR="$SOURCE_DIR"
+        REQUIRED_PKGS=(bind-utils diffutils curl gawk gmp gzip libcap libnfnetlink net-tools nftables sed shadow-utils tar util-linux)
+        PKG_INSTALL_CMD="dnf install -y"
+    fi
+else
+    REQUIRED_PKGS=("dnsutils|bind9-dnsutils" curl libgmp10 ipset iptables "libcap2" libmnl0 libnfnetlink0 net-tools sed uuid-runtime)
+    PKG_INSTALL_CMD="apt-get install -y"
+fi
+
+pkg_installed() {
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        rpm -q "$1" > /dev/null 2>&1
+    else
+        dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed$'
+    fi
+}
+
+MISSING_PKGS=()
+for spec in "${REQUIRED_PKGS[@]}"; do
+    found=""
+    IFS='|' read -r -a alternatives <<< "$spec"
+    for pkg in "${alternatives[@]}"; do
+        if pkg_installed "$pkg"; then found="$pkg"; break; fi
+    done
+    if [ -n "$found" ]; then
+        log OK "$found"
+    else
+        log FAIL "${alternatives[0]} (未安裝)"
+        MISSING_PKGS+=("${alternatives[0]}")
+    fi
+done
+
+if [ "${#MISSING_PKGS[@]}" -gt 0 ]; then
+    log ERROR "請先安裝缺少的套件後重新執行:"
+    log ERROR "  $PKG_INSTALL_CMD ${MISSING_PKGS[*]}"
+    die "$EX_DEPS" "缺少 ${#MISSING_PKGS[@]} 個相依套件。"
+fi
+log OK "相依套件齊全。"
+
+# ---------- Step 3: CA 憑證 ----------
+step "Step 3/6: 匯入 CA 憑證"
+
+CERT_CONTENT=""; CERT_SOURCE=""
+if [ -n "$CERT_FILE" ]; then
+    [ -r "$CERT_FILE" ] || die "$EX_CERT" "指定的憑證檔不存在或無法讀取: $CERT_FILE"
+    CERT_CONTENT=$(cat "$CERT_FILE"); CERT_SOURCE="$CERT_FILE"
+elif [ -r "$SCRIPT_DIR/illumio-ca.crt" ]; then
+    CERT_CONTENT=$(cat "$SCRIPT_DIR/illumio-ca.crt"); CERT_SOURCE="$SCRIPT_DIR/illumio-ca.crt"
+elif [[ "$EMBEDDED_CERT" != *PLACEHOLDER_CERTIFICATE_CONTENT* ]]; then
+    CERT_CONTENT="$EMBEDDED_CERT"; CERT_SOURCE="腳本內嵌憑證"
+fi
+
+if [ -z "$CERT_SOURCE" ]; then
+    log SKIP "未提供 CA 憑證，跳過匯入。將以系統既有的信任憑證驗證 PCE。"
+else
+    log INFO "憑證來源: $CERT_SOURCE"
+    if [[ "$CERT_CONTENT" != *"-----BEGIN CERTIFICATE-----"* ]] || [[ "$CERT_CONTENT" == *PLACEHOLDER_CERTIFICATE_CONTENT* ]]; then
+        die "$EX_CERT" "憑證內容不是 PEM 格式 (缺少 BEGIN CERTIFICATE，或仍為佔位符)。"
+    fi
+    if command -v openssl > /dev/null 2>&1 && ! printf '%s\n' "$CERT_CONTENT" | openssl x509 -noout 2>/dev/null; then
+        die "$EX_CERT" "憑證內容無法解析為有效的 X.509 憑證。"
     fi
 
-    case "$OS_TYPE" in
-        rhel|centos|rocky|almalinux|ol)
-            if [ -z "$VEN_RPM_FILE" ]; then
-                VEN_RPM_FILE=$(ls "$TARGET_DIR"/*.rpm 2>/dev/null | head -1)
-            else
-                VEN_RPM_FILE="$TARGET_DIR/$VEN_RPM_FILE"
-            fi
-            if [ -z "$VEN_RPM_FILE" ] || [ ! -f "$VEN_RPM_FILE" ]; then
-                print_error "找不到 VEN RPM 安裝包。請確保放在: $TARGET_DIR"; exit 1
-            fi
-            print_info "安裝: $(basename "$VEN_RPM_FILE")"
-            rpm -ivh "$VEN_RPM_FILE"
-            print_ok "VEN 安裝完成。" ;;
-        ubuntu|debian)
-            if [ -z "$VEN_DEB_FILE" ]; then
-                VEN_DEB_FILE=$(ls "$TARGET_DIR"/*.deb 2>/dev/null | head -1)
-            else
-                VEN_DEB_FILE="$TARGET_DIR/$VEN_DEB_FILE"
-            fi
-            if [ -z "$VEN_DEB_FILE" ] || [ ! -f "$VEN_DEB_FILE" ]; then
-                print_error "找不到 VEN DEB 安裝包。請確保放在: $TARGET_DIR"; exit 1
-            fi
-            print_info "安裝: $(basename "$VEN_DEB_FILE")"
-            dpkg -i "$VEN_DEB_FILE"
-            print_ok "VEN 安裝完成。" ;;
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        TRUST_DIR="/etc/pki/ca-trust/source/anchors"; TRUST_UPDATE="update-ca-trust"
+    else
+        TRUST_DIR="/usr/local/share/ca-certificates"; TRUST_UPDATE="update-ca-certificates"
+    fi
+    TRUST_FILE="$TRUST_DIR/illumio-ca.crt"
+    command -v "$TRUST_UPDATE" > /dev/null 2>&1 || die "$EX_CERT" "找不到 $TRUST_UPDATE (請確認已安裝 ca-certificates 套件)。"
+
+    if [ -f "$TRUST_FILE" ] && [ "$(cat "$TRUST_FILE")" = "$CERT_CONTENT" ]; then
+        log SKIP "憑證已存在且內容相同: $TRUST_FILE"
+    else
+        mkdir -p "$TRUST_DIR" || die "$EX_CERT" "無法建立目錄: $TRUST_DIR"
+        printf '%s\n' "$CERT_CONTENT" > "$TRUST_FILE" || die "$EX_CERT" "無法寫入: $TRUST_FILE"
+        chmod 644 "$TRUST_FILE"
+        command -v restorecon > /dev/null 2>&1 && restorecon "$TRUST_FILE" 2>/dev/null
+        if [ "$OS_FAMILY" = "rhel" ]; then
+            update-ca-trust extract >> "$LOG_FILE" 2>&1 || die "$EX_CERT" "update-ca-trust 執行失敗。"
+        else
+            update-ca-certificates >> "$LOG_FILE" 2>&1 || die "$EX_CERT" "update-ca-certificates 執行失敗。"
+        fi
+        log OK "憑證已匯入: $TRUST_FILE"
+    fi
+fi
+
+# ---------- Step 4: 安裝前連線檢查 ----------
+step "Step 4/6: 檢查 PCE 連線與憑證信任"
+
+if [ "$SKIP_TLS_CHECK" = "1" ]; then
+    log SKIP "已指定略過 TLS 連線檢查。"
+else
+    # 不加 -f：只要 TLS 握手完成即視為通過，HTTP 狀態碼不影響判斷
+    curl_err=$(curl -sS -o /dev/null --connect-timeout 10 --max-time 30 "https://$MANAGEMENT_SERVER/" 2>&1)
+    curl_rc=$?
+    case "$curl_rc" in
+        0) log OK "已與 $MANAGEMENT_SERVER 完成 TLS 握手，憑證受信任。" ;;
+        35|51|53|54|58|59|60|77|83|90|91)
+            log ERROR "curl: $curl_err"
+            die "$EX_NET" "無法驗證 PCE 憑證 (curl 結束碼 $curl_rc)。請提供簽發 PCE 憑證的 CA (--cert-file)，並確認路徑上沒有 TLS 攔截。" ;;
+        *)
+            log ERROR "curl: $curl_err"
+            die "$EX_NET" "無法連線至 $MANAGEMENT_SERVER (curl 結束碼 $curl_rc)。請檢查 DNS、防火牆與 Proxy 設定。" ;;
     esac
 fi
 
-# === Step 5: 啟用 ===
-print_header "Step 5/5: 啟用 VEN Agent"
+# ---------- Step 5: 安裝 VEN ----------
+step "Step 5/6: 安裝 VEN 套件"
 
-VEN_CTL="/opt/illumio_ven/illumio-ven-ctl"
-if [ ! -f "$VEN_CTL" ]; then print_error "找不到 $VEN_CTL"; exit 1; fi
+if pkg_installed illumio-ven; then
+    log SKIP "VEN 已安裝，跳過安裝。"
+else
+    PKG_EXT="rpm"; [ "$OS_FAMILY" = "debian" ] && PKG_EXT="deb"
+    PKG_DIR="${SOURCE_DIR:-$SCRIPT_DIR}"
 
-print_info "Server: $MANAGEMENT_SERVER"
-"$VEN_CTL" activate --management-server "$MANAGEMENT_SERVER" --activation-code "$ACTIVATION_CODE"
-print_ok "啟用指令已送出。"
+    if [ -n "$VEN_PACKAGE" ]; then
+        case "$VEN_PACKAGE" in /*) PKG_PATH="$VEN_PACKAGE" ;; *) PKG_PATH="$PKG_DIR/$VEN_PACKAGE" ;; esac
+    else
+        shopt -s nullglob
+        candidates=("$PKG_DIR"/*illumio-ven*."$PKG_EXT")
+        shopt -u nullglob
+        if [ "${#candidates[@]}" -eq 0 ]; then
+            die "$EX_INSTALL" "在 $PKG_DIR 找不到 *illumio-ven*.$PKG_EXT。請放入安裝包，或用 --package 指定。"
+        elif [ "${#candidates[@]}" -gt 1 ]; then
+            for c in "${candidates[@]}"; do log ERROR "  候選: $c"; done
+            die "$EX_INSTALL" "在 $PKG_DIR 找到多個安裝包，無法判斷要裝哪一個。請用 --package 指定。"
+        fi
+        PKG_PATH="${candidates[0]}"
+    fi
+    [ -f "$PKG_PATH" ] || die "$EX_INSTALL" "找不到安裝包: $PKG_PATH"
 
-print_header "部署完成"
-echo -e "${GREEN}驗證: sudo $VEN_CTL status${NC}"
-echo ""
+    log INFO "安裝: $PKG_PATH"
+    if [ "$OS_FAMILY" = "rhel" ]; then
+        rpm -ivh "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
+    else
+        dpkg -i "$PKG_PATH" 2>&1 | tee -a "$LOG_FILE"
+    fi
+    install_rc="${PIPESTATUS[0]}"
+    [ "$install_rc" -eq 0 ] || die "$EX_INSTALL" "套件安裝失敗 (結束碼 $install_rc)。"
+    log OK "VEN 安裝完成。"
+fi
+
+# ---------- Step 6: 啟用 ----------
+step "Step 6/6: 向 PCE 啟用"
+
+[ -x "$VEN_CTL" ] || die "$EX_ACTIVATE" "找不到 $VEN_CTL，VEN 可能未正確安裝。"
+
+# 已配對的 VEN 會在資料目錄留下 agent_id.cfg；再次 activate 會失敗，故直接跳過
+if [ -s "$VEN_DATA_DIR/etc/agent_id.cfg" ]; then
+    log SKIP "VEN 已啟用 (存在 $VEN_DATA_DIR/etc/agent_id.cfg)，跳過啟用。"
+else
+    log INFO "PCE: $MANAGEMENT_SERVER"
+    "$VEN_CTL" activate --management-server "$MANAGEMENT_SERVER" --activation-code "$ACTIVATION_CODE" 2>&1 | tee -a "$LOG_FILE"
+    activate_rc="${PIPESTATUS[0]}"
+    [ "$activate_rc" -eq 0 ] || die "$EX_ACTIVATE" "啟用失敗 (結束碼 $activate_rc)。請確認啟用碼有效且未超過使用次數。"
+    log OK "啟用完成。"
+fi
+
+step "部署完成"
+log OK "確認狀態: $VEN_CTL status"
+exit "$EX_OK"
