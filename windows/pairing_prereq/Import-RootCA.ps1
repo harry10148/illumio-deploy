@@ -33,6 +33,23 @@ PLACEHOLDER_CERTIFICATE_CONTENT_REPLACE_WITH_YOUR_ACTUAL_CERTIFICATE
 -----END CERTIFICATE-----
 "@
 
+# 以 certutil 計算憑證指紋 (PEM 轉 DER 後取 SHA1)。全程不需互動；
+# Get-PfxCertificate 遇到無效內容會停在密碼提示，不能用於無人值守。
+function Get-CertThumbprint {
+    param([string]$Path)
+    $der = Join-Path $env:TEMP "illumio-ca.der"
+    Remove-Item -LiteralPath $der -Force -ErrorAction SilentlyContinue
+    & certutil.exe -decode $Path $der | Out-Null
+    $src = $der
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $der)) { $src = $Path }   # 已是 DER 格式
+    $lines = @(& certutil.exe -hashfile $src SHA1)
+    Remove-Item -LiteralPath $der -Force -ErrorAction SilentlyContinue
+    if ($lines.Count -lt 2) { return "" }
+    $thumb = ($lines[1] -replace '[^0-9A-Fa-f]', '').ToUpper()
+    if ($thumb.Length -ne 40) { return "" }
+    return $thumb
+}
+
 function Stop-Import {
     param([int]$Code, [string]$Message)
     Write-Output "[ERROR] $Message"
@@ -72,23 +89,14 @@ try {
         Stop-Import 6 "憑證檔內容仍為佔位符。"
     }
 
-    try {
-        $cert = Get-PfxCertificate -FilePath $certPath
-    } catch {
-        Stop-Import 6 "憑證內容無法解析為有效的 X.509 憑證: $_"
-    }
-    $thumbprint = $cert.Thumbprint
+    $thumbprint = Get-CertThumbprint $certPath
     Write-Output "[INFO] Thumbprint: $thumbprint"
-    Write-Output "[INFO] Subject:    $($cert.Subject)"
 
-    if (Test-Path -LiteralPath "Cert:\LocalMachine\Root\$thumbprint") {
+    if ($thumbprint -and (Test-Path -LiteralPath "Cert:\LocalMachine\Root\$thumbprint")) {
         Write-Output "[SKIP] 憑證已存在於受信任的根憑證授權單位，無須重複匯入。"
     } else {
-        try {
-            Import-Certificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
-        } catch {
-            Stop-Import 6 "憑證匯入失敗: $_"
-        }
+        & certutil.exe -addstore Root $certPath | ForEach-Object { Write-Output "[INFO] certutil: $_" }
+        if ($LASTEXITCODE -ne 0) { Stop-Import 6 "憑證匯入失敗 (憑證內容無效，或權限不足)。" }
         Write-Output "[OK] 憑證已匯入受信任的根憑證授權單位。"
     }
 

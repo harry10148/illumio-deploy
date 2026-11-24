@@ -5,6 +5,7 @@ REM ===========================================================================
 REM  Illumio VEN 完整部署 (Windows / Batch)
 REM
 REM  流程: CA 憑證匯入 -> PCE 連線檢查 -> 靜默安裝 -> 啟用
+REM  本機沒有安裝檔時，向 PCE 下載符合本機的版本並驗證 SHA256 (需要 curl.exe)。
 REM  可重複執行、全程不需互動。只使用 cmd 內建指令與 certutil / whoami /
 REM  findstr，不呼叫 PowerShell，適用於封鎖 PowerShell 的環境。
 REM
@@ -16,6 +17,7 @@ REM    0    成功 (含已安裝、已啟用而跳過)      6  憑證無效或�
 REM    3010 成功，但需要重新開機               7  無法連線或無法驗證 PCE
 REM    2    參數錯誤                           8  安裝失敗
 REM    3    權限不足                           9  啟用失敗
+REM    (8 也包含找不到安裝檔與下載失敗)
 REM ===========================================================================
 
 setlocal enabledelayedexpansion
@@ -27,8 +29,12 @@ set "MANAGEMENT_SERVER=<YOUR_PCE_FQDN:PORT>"
 set "ACTIVATION_CODE=<YOUR_ACTIVATION_CODE>"
 REM 安裝檔所在目錄；留空 = 腳本所在目錄
 set "SOURCE_DIR="
-REM 安裝檔檔名；留空 = 自動尋找 *illumio-ven*.exe
+REM 安裝檔檔名；留空 = 自動尋找 *illumio-ven*.exe，找不到則向 PCE 下載
 set "EXE_FILE="
+REM 設為 1 = 本機沒有安裝檔時不向 PCE 下載，直接失敗
+set "NO_DOWNLOAD=0"
+REM 下載安裝檔使用的 PCE API 版本 (較新的 PCE 仍接受較舊的版本)
+set "API_VERSION=v25"
 set "INSTALL_DIR=C:\Program Files\Illumio"
 set "DATA_DIR=C:\ProgramData\Illumio"
 set "LOG_FILE=%TEMP%\IllumioDeploy.log"
@@ -42,6 +48,8 @@ if defined ILLUMIO_ACTIVATION_CODE set "ACTIVATION_CODE=%ILLUMIO_ACTIVATION_CODE
 set "DEFAULT_INSTALL_DIR=C:\Program Files\Illumio"
 set "DEFAULT_DATA_DIR=C:\ProgramData\Illumio"
 set "REBOOT_REQUIRED="
+set "DOWNLOADED="
+set "CURL=%SystemRoot%\System32\curl.exe"
 
 call :Log ==== Illumio VEN 部署 (Batch) ====
 
@@ -95,14 +103,37 @@ if not errorlevel 1 (
     call :Log [ERROR] 憑證檔內容仍為佔位符。
     exit /b 6
 )
-REM certutil -addstore 對已存在的憑證不會重複加入，本身即可重複執行
+REM 指紋 = DER 編碼的 SHA1：先把 PEM 轉成 DER 再取雜湊 (certutil 輸出第二行，不受語系影響)
+set "CERT_DER=%TEMP%\illumio-ca.der"
+del "%CERT_DER%" 2>nul
+set "HASH_SRC=%CERT_DER%"
+certutil -decode "!CERT_PATH!" "%CERT_DER%" >nul 2>&1
+if errorlevel 1 set "HASH_SRC=!CERT_PATH!"
+set "THUMB="
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "!HASH_SRC!" SHA1 2^>nul') do if not defined THUMB set "THUMB=%%H"
+if defined THUMB set "THUMB=!THUMB: =!"
+del "%CERT_DER%" 2>nul
+
+REM 已存在就不再匯入 (含群組原則派發的憑證)。certutil -verifystore 對不存在的憑證也回 0，故直接查登錄機碼
+set "CERT_EXISTS="
+if defined THUMB (
+    for %%K in ("HKLM\SOFTWARE\Microsoft\SystemCertificates\ROOT\Certificates" "HKLM\SOFTWARE\Policies\Microsoft\SystemCertificates\ROOT\Certificates" "HKLM\SOFTWARE\Microsoft\EnterpriseCertificates\ROOT\Certificates") do (
+        reg query "%%~K\!THUMB!" >nul 2>&1 && set "CERT_EXISTS=1"
+    )
+)
+if defined CERT_EXISTS (
+    call :Log [SKIP]   憑證已存在於受信任的根憑證授權單位 ^(Thumbprint: !THUMB!^)。
+    del "%TEMP_CERT%" 2>nul
+    goto :step2
+)
+
 certutil -addstore Root "!CERT_PATH!" >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
     call :Log [ERROR] 憑證匯入失敗 ^(憑證無效或權限不足^)。詳見: %LOG_FILE%
     del "%TEMP_CERT%" 2>nul
     exit /b 6
 )
-call :Log [OK]     憑證已在受信任的根憑證授權單位。
+call :Log [OK]     憑證已匯入 ^(Thumbprint: !THUMB!^)。
 del "%TEMP_CERT%" 2>nul
 
 :step2
@@ -113,12 +144,13 @@ if "%SKIP_TLS_CHECK%"=="1" (
     call :Log [SKIP]   已指定略過連線檢查。
     goto :step3
 )
-if not exist "%SystemRoot%\System32\curl.exe" (
+if not exist "%CURL%" (
     call :Log [SKIP]   此系統無 curl.exe ^(Windows 10 1803 / Server 2019 以前^)，略過連線檢查。
     goto :step3
 )
 REM curl.exe 走 Schannel 與系統憑證存放區，可同時驗證信任鏈
-"%SystemRoot%\System32\curl.exe" -sS -o NUL --connect-timeout 10 --max-time 30 "https://%MANAGEMENT_SERVER%/" >> "%LOG_FILE%" 2>&1
+REM --ssl-no-revoke：私有 CA 通常沒有可連線的撤銷清單，Schannel 預設會因此拒絕連線
+"%CURL%" -sS --ssl-no-revoke -o NUL --connect-timeout 10 --max-time 30 "https://%MANAGEMENT_SERVER%/" >> "%LOG_FILE%" 2>&1
 set "CURL_RC=!errorlevel!"
 if "!CURL_RC!"=="0" (
     call :Log [OK]     已與 %MANAGEMENT_SERVER% 完成 TLS 握手，憑證受信任。
@@ -157,22 +189,81 @@ if "%EXE_FILE%"=="" (
         set /a EXE_COUNT+=1
         set "EXE_FILE=%%~nxF"
     )
-    if "!EXE_COUNT!"=="0" (
-        call :Log [ERROR] 在 !PKG_DIR! 找不到 *illumio-ven*.exe。請放入安裝檔，或設定 EXE_FILE。
-        exit /b 8
-    )
-    if not "!EXE_COUNT!"=="1" (
+    if !EXE_COUNT! GTR 1 (
         call :Log [ERROR] 在 !PKG_DIR! 找到 !EXE_COUNT! 個安裝檔，無法判斷要裝哪一個。請設定 EXE_FILE。
         exit /b 8
     )
 )
 
-set "INSTALLER=!PKG_DIR!!EXE_FILE!"
-if not exist "!INSTALLER!" (
-    call :Log [ERROR] 找不到安裝檔: !INSTALLER!
+if not "!EXE_FILE!"=="" (
+    set "INSTALLER=!PKG_DIR!!EXE_FILE!"
+    if not exist "!INSTALLER!" (
+        call :Log [ERROR] 找不到安裝檔: !INSTALLER!
+        exit /b 8
+    )
+    goto :install
+)
+
+REM --- 本機沒有安裝檔：向 PCE 下載 (與官方 pair.ps1 相同的機制) ---
+if "%NO_DOWNLOAD%"=="1" (
+    call :Log [ERROR] 在 !PKG_DIR! 找不到 *illumio-ven*.exe ^(已設定 NO_DOWNLOAD^)。
+    exit /b 8
+)
+if not exist "%CURL%" (
+    call :Log [ERROR] 在 !PKG_DIR! 找不到 *illumio-ven*.exe，且此系統沒有 curl.exe 可向 PCE 下載。請自行提供安裝檔。
     exit /b 8
 )
 
+set "DL_ARCH=%PROCESSOR_ARCHITECTURE%"
+if /i "%DL_ARCH%"=="AMD64" set "DL_ARCH=x64"
+REM ver 的輸出為「... [Version 10.0.20348.1]」；方括號內最後一個字是版本，文字部分會隨語系改變
+set "OS_FULLVER="
+for /f "tokens=2 delims=[]" %%A in ('ver') do for %%B in (%%A) do set "OS_FULLVER=%%B"
+for /f "tokens=1,2 delims=." %%M in ("!OS_FULLVER!") do set "DL_OSVER=%%M.%%N"
+
+set "DL_FILE=%TEMP%\illumio-ven-download.tmp"
+set "DL_HEADERS=%TEMP%\illumio-ven-download.headers"
+call :Log [INFO]   本機沒有安裝檔，向 PCE 下載 [!DL_ARCH!][Windows][!DL_OSVER!]
+
+set "HTTP_CODE="
+for /f "delims=" %%H in ('""%CURL%" -sS --ssl-no-revoke --user "agent_0:%ACTIVATION_CODE%" --connect-timeout 10 --max-time 900 -D "%DL_HEADERS%" -o "%DL_FILE%" -w "%%{http_code}" "https://%MANAGEMENT_SERVER%/api/%API_VERSION%/software/ven/image?architecture=!DL_ARCH!^&distribution=Windows^&version=!DL_OSVER!""') do set "HTTP_CODE=%%H"
+if not "!HTTP_CODE!"=="200" (
+    del "%DL_FILE%" "%DL_HEADERS%" 2>nul
+    if "!HTTP_CODE!"=="401" call :Log [ERROR] PCE 拒絕下載 ^(HTTP 401^)。請確認啟用碼有效且未過期。
+    if "!HTTP_CODE!"=="406" call :Log [ERROR] PCE 的 VEN Library 沒有符合 [!DL_ARCH!][Windows][!DL_OSVER!] 的安裝檔。請自行提供安裝檔。
+    call :Log [ERROR] 安裝檔下載失敗 ^(HTTP !HTTP_CODE!^)。
+    exit /b 8
+)
+
+set "EXPECTED_SHA="
+set "DL_NAME="
+for /f "tokens=2 delims=: " %%H in ('findstr /i /b "x-sha256:" "%DL_HEADERS%"') do set "EXPECTED_SHA=%%H"
+for /f "tokens=2 delims==" %%H in ('findstr /i /b "content-disposition:" "%DL_HEADERS%"') do set "DL_NAME=%%~nxH"
+del "%DL_HEADERS%" 2>nul
+if not defined EXPECTED_SHA goto :dl_bad_headers
+if not defined DL_NAME goto :dl_bad_headers
+
+REM certutil -hashfile 的第二行是雜湊值
+set "ACTUAL_SHA="
+for /f "skip=1 delims=" %%H in ('certutil -hashfile "%DL_FILE%" SHA256') do if not defined ACTUAL_SHA set "ACTUAL_SHA=%%H"
+set "ACTUAL_SHA=!ACTUAL_SHA: =!"
+if /i not "!ACTUAL_SHA!"=="!EXPECTED_SHA!" (
+    del "%DL_FILE%" 2>nul
+    call :Log [ERROR] 安裝檔 SHA256 不符 ^(預期 !EXPECTED_SHA!，實際 !ACTUAL_SHA!^)。
+    exit /b 8
+)
+set "INSTALLER=%TEMP%\!DL_NAME!"
+move /y "%DL_FILE%" "!INSTALLER!" >nul
+set "DOWNLOADED=!INSTALLER!"
+call :Log [OK]     已下載並通過 SHA256 驗證: !DL_NAME!
+goto :install
+
+:dl_bad_headers
+del "%DL_FILE%" 2>nul
+call :Log [ERROR] PCE 回應缺少檔名或 SHA256 標頭，無法驗證安裝檔。
+exit /b 8
+
+:install
 set "VEN_INSTALL_LOG=%TEMP%\IllumioVENInstall.log"
 REM INSTALLFOLDER 與 DATAFOLDER 是獨立的安裝屬性，各自非預設值時才傳入
 set "EXTRA_ARGS="
@@ -182,6 +273,7 @@ if /i not "%DATA_DIR%"=="%DEFAULT_DATA_DIR%" set "EXTRA_ARGS=!EXTRA_ARGS! DATAFO
 call :Log [INFO]   安裝: !INSTALLER!
 "!INSTALLER!" /install /quiet /norestart /log "%VEN_INSTALL_LOG%" !EXTRA_ARGS! >> "%LOG_FILE%" 2>&1
 set "INSTALL_RC=!errorlevel!"
+if defined DOWNLOADED del "!DOWNLOADED!" 2>nul
 
 if "!INSTALL_RC!"=="3010" (
     set "REBOOT_REQUIRED=1"
