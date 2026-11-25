@@ -52,7 +52,7 @@ while IFS= read -r hit; do err "疑似啟用碼或私鑰: $hit"; done < <(
 python3 - << 'PY' || fail=1
 import re, subprocess, os, sys, unicodedata
 files = subprocess.run(['git', 'ls-files', '-z', '--', '*.md'], capture_output=True, text=True).stdout.split('\0')
-files = [f for f in files if f and not f.startswith(('docs/superpowers/', 'docs/guide/'))]
+files = [f for f in files if f and not f.startswith('docs/guide/')]
 def slug(h):
     h = re.sub(r'`', '', h.strip().lower())
     out = ''.join(c for c in h if c in '-_ ' or unicodedata.category(c)[0] in 'LN')
